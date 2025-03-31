@@ -1,4 +1,4 @@
-FROM ghcr.io/blockscout/services-base:latest as chef
+FROM ghcr.io/blockscout/services-base:chef-0.1.68-rust-1.83-bullseye-protoc-25.2-openapi-2.19.0 as chef
 
 FROM chef AS plan
 COPY . .
@@ -16,7 +16,7 @@ COPY --from=cache $CARGO_HOME $CARGO_HOME
 RUN cargo build --release
 
 FROM ubuntu:20.04 as run
-RUN apt-get update && apt-get install -y libssl1.1 libssl-dev ca-certificates
+RUN apt-get update && apt-get install -y libssl1.1 libssl-dev ca-certificates curl
 
 WORKDIR /app
 ENV APP_USER=app

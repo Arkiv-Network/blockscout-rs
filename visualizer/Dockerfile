@@ -1,4 +1,4 @@
-FROM ghcr.io/blockscout/services-base:latest as chef
+FROM ghcr.io/blockscout/services-base:chef-0.1.68-rust-1.83-bullseye-protoc-25.2-openapi-2.19.0 as chef
 
 FROM chef AS plan
 COPY . .
@@ -17,7 +17,7 @@ RUN cargo build --release
 FROM node:16-bullseye-slim
 WORKDIR /usr/src/
 
-RUN apt-get update && apt-get install -y chromium \
+RUN apt-get update && apt-get install -y chromium curl \
     && npm link sol2uml@2.1 --only=production
 
 COPY --from=build /app/target/release/visualizer-server ./
