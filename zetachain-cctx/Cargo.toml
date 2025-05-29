@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "zetachain-cctx-logic",
+    "zetachain-cctx-entity",
+    "zetachain-cctx-migration",
+    "zetachain-cctx-proto",
+    "zetachain-cctx-server",
+]
+
+[workspace.dependencies]
+blockscout-service-launcher = "0.12.1"
