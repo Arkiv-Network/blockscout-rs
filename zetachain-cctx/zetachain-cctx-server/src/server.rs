@@ -9,7 +9,7 @@ use crate::{
 };
 use blockscout_service_launcher::{
     database,
-    launcher, launcher::LaunchSettings, tracing};
+    launcher::{self, GracefulShutdownHandler, LaunchSettings}, tracing};
 
 use migration::Migrator;
 
@@ -58,7 +58,8 @@ pub async fn run(settings: Settings) -> Result<(), anyhow::Error> {
         service_name: SERVICE_NAME.to_string(),
         server: settings.server,
         metrics: settings.metrics,
+        graceful_shutdown: GracefulShutdownHandler::default(),
     };
 
-    launcher::launch(&launch_settings, http_router, grpc_router).await
+    launcher::launch(launch_settings, http_router, grpc_router).await
 }

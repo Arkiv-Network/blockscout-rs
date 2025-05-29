@@ -38,6 +38,7 @@ impl Settings {
                 connect: DatabaseConnectSettings::Url(database_url),
                 create_database: Default::default(),
                 run_migrations: Default::default(),
+                connect_options: Default::default(),
             },
         }
     }
