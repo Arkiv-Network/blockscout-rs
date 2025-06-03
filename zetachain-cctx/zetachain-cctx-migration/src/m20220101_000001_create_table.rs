@@ -6,14 +6,23 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Create the enum type first
+        let db = manager.get_connection();
+        db.execute_unprepared(
+            r#"DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tx_finalization_status') THEN
+                    CREATE TYPE tx_finalization_status AS ENUM ('NotFinalized', 'Finalized', 'Executed');
+                END IF;
+            END $$;"#,
+        )
+        .await?;
 
         manager.create_table(
             Table::create()
             .table(Watermark::Table)
             .if_not_exists()
             .col(ColumnDef::new(Watermark::Id).integer().not_null().auto_increment().primary_key())
-            .col(ColumnDef::new(Watermark::Realtime).string().not_null())
-            .col(ColumnDef::new(Watermark::Historical).string().not_null())
+            .col(ColumnDef::new(Watermark::WatermarkType).string().null())
             .to_owned(),
         )
         .await?;
@@ -96,7 +105,10 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(InboundParams::ObservedExternalHeight).string().not_null())
                     .col(ColumnDef::new(InboundParams::BallotIndex).string().not_null())
                     .col(ColumnDef::new(InboundParams::FinalizedZetaHeight).string().not_null())
-                    .col(ColumnDef::new(InboundParams::TxFinalizationStatus).string().not_null())
+                    .col(ColumnDef::new(InboundParams::TxFinalizationStatus).enumeration(
+                        "tx_finalization_status",
+                        ["NotFinalized", "Finalized", "Executed"]
+                    ))
                     .col(ColumnDef::new(InboundParams::IsCrossChainCall).boolean().not_null())
                     .col(ColumnDef::new(InboundParams::Status).string().not_null())
                     .col(ColumnDef::new(InboundParams::ConfirmationMode).string().not_null())
@@ -140,7 +152,10 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(OutboundParams::EffectiveGasPrice).string().not_null())
                     .col(ColumnDef::new(OutboundParams::EffectiveGasLimit).string().not_null())
                     .col(ColumnDef::new(OutboundParams::TssPubkey).string().not_null())
-                    .col(ColumnDef::new(OutboundParams::TxFinalizationStatus).string().not_null())
+                    .col(ColumnDef::new(OutboundParams::TxFinalizationStatus).enumeration(
+                        "tx_finalization_status",
+                        ["NotFinalized", "Finalized", "Executed"]
+                    ))
                     .col(ColumnDef::new(OutboundParams::CallOptionsGasLimit).string().not_null())
                     .col(ColumnDef::new(OutboundParams::CallOptionsIsArbitraryCall).boolean().not_null())
                     .col(ColumnDef::new(OutboundParams::ConfirmationMode).string().not_null())
@@ -205,6 +220,17 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(CrossChainTx::Table).to_owned())
             .await?;
 
+        // Drop the enum type
+        let db = manager.get_connection();
+        db.execute_unprepared(
+            r#"DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tx_finalization_status') THEN
+                    DROP TYPE tx_finalization_status;
+                END IF;
+            END $$;"#,
+        )
+        .await?;
+
         Ok(())
     }
 }
@@ -213,8 +239,7 @@ impl MigrationTrait for Migration {
 enum Watermark {
     Table,
     Id,
-    Realtime,
-    Historical,
+    WatermarkType,
 }
 /// Learn more at https://docs.rs/sea-query#iden
 #[derive(Iden)]

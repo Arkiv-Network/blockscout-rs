@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::task::JoinHandle;
-use zetachain_cctx_entity::inbound_params::TxFinalizationStatus;
+use zetachain_cctx_entity::types::{TxFinalizationStatus, WatermarkType};
 use zetachain_cctx_entity::{
     cross_chain_tx, cctx_status, inbound_params, outbound_params, revert_options,
     prelude::*, watermark
@@ -21,6 +21,13 @@ pub struct Indexer {
     pub client: Arc<Client>,
 }
 
+
+
+enum IndexerJob {
+    StatusUpdate(String),//cctx index to be updated
+    GapFill(String), // Watermark (pointer) to the next page of cctxs to be fetched
+}
+
 impl Indexer {
     pub fn new(
         settings: IndexerSettings,
@@ -33,6 +40,32 @@ impl Indexer {
             client,
         }
     }
+
+
+    pub fn run(&self) {
+        let status_update_stream = Box::pin(async_stream::stream!{
+            loop {
+                //select cctx where execution_status is not final
+                //if there is no cctx, sleep for 1 second
+                //if there is cctx, yield the cctx index
+                //sleep for 1 second
+                //repeat
+                // let cctxs = cross_chain_tx::Entity::find()
+                //     .filter(cross_chain_tx::Column::ExecutionStatus.ne(ExecutionStatus::Final))
+                //     .order_by(cross_chain_tx::Column::Index.asc())
+                //     .limit(100)
+                //     .all(self.db.as_ref())
+                //     .await
+                //     .unwrap();
+                // for cctx in cctxs {
+                //     yield IndexerJob::StatusUpdate(cctx.index.to_string());
+                // }
+                tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
+            }
+        });
+    }
+
+    
 
     #[instrument(skip(db, tx), fields(tx_index = %tx.index))]
     async fn insert_transaction(db: Arc<DatabaseConnection>, tx: CrossChainTx) -> anyhow::Result<()> {
@@ -59,7 +92,7 @@ impl Indexer {
             .await?;
 
         // Get the inserted tx id
-        let (tx_id,_index) = tx_result.last_insert_id;
+        let tx_id = tx_result.last_insert_id;
 
         // Insert cctx_status
         let status_model = cctx_status::ActiveModel {
@@ -123,7 +156,7 @@ impl Indexer {
                 effective_gas_price: ActiveValue::Set(outbound.effective_gas_price),
                 effective_gas_limit: ActiveValue::Set(outbound.effective_gas_limit),
                 tss_pubkey: ActiveValue::Set(outbound.tss_pubkey),
-                tx_finalization_status: ActiveValue::Set(outbound.tx_finalization_status),
+                tx_finalization_status: ActiveValue::Set(TxFinalizationStatus::from(outbound.tx_finalization_status)),
                 call_options_gas_limit: ActiveValue::Set(outbound.call_options.gas_limit),
                 call_options_is_arbitrary_call: ActiveValue::Set(outbound.call_options.is_arbitrary_call),
                 confirmation_mode: ActiveValue::Set(outbound.confirmation_mode),
@@ -152,7 +185,7 @@ impl Indexer {
         Ok(())
     }
 
-    pub fn status_updater(&self) ->
+    
     #[instrument(skip(self))]
     pub fn create_realtime_fetcher(&self) -> JoinHandle<()> {
         let db = self.db.clone();
@@ -188,10 +221,8 @@ impl Indexer {
                         //there might be a gap, so we need to save pagination.next_key as a starting point for the gap-filling process
                         watermark::Entity::insert(watermark::ActiveModel {
                             id: ActiveValue::NotSet,
-                            pointer: ActiveValue::Set(Some(next_key)),
-                            watermark_type: ActiveValue::Set(String::from("realtime")),
-                            created_at: ActiveValue::Set(DateTime::from(Utc::now().naive_utc())),
-                            updated_at: ActiveValue::Set(DateTime::from(Utc::now().naive_utc())),
+                            watermark_type: ActiveValue::Set(WatermarkType::Realtime),
+                            pointer: ActiveValue::Set(next_key),
                         })
                         .exec(db.as_ref())
                         .instrument(tracing::info_span!("creating new realtime watermark"))

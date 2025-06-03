@@ -5520,6 +5520,7 @@ name = "zetachain-cctx-logic"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "base64 0.22.1",
  "blockscout-display-bytes",
  "blockscout-service-launcher",

@@ -8,7 +8,6 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub creator: String,
-    #[sea_orm(primary_key)]
     pub index: String,
     pub zeta_fees: String,
     #[sea_orm(column_type = "Text", nullable)]

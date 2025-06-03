@@ -7,4 +7,5 @@ pub mod cross_chain_tx;
 pub mod inbound_params;
 pub mod outbound_params;
 pub mod revert_options;
+pub mod types;
 pub mod watermark;
