@@ -4,6 +4,7 @@ use blockscout_service_launcher::{
     tracing::{JaegerSettings, TracingSettings},
 };
 use serde::Deserialize;
+use zetachain_cctx_logic::{client::RpcSettings, settings::IndexerSettings};
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -17,6 +18,10 @@ pub struct Settings {
     #[serde(default)]
     pub jaeger: JaegerSettings,
     pub database: DatabaseSettings,
+    #[serde(default)]
+    pub indexer: IndexerSettings,
+    #[serde(default)]
+    pub rpc: RpcSettings,
     }
 
 impl ConfigSettings for Settings {
@@ -40,6 +45,8 @@ impl Settings {
                 run_migrations: Default::default(),
                 connect_options: Default::default(),
             },
+            indexer: Default::default(),
+            rpc: Default::default(),
         }
     }
 }

@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use blockscout_service_launcher::{
     test_database::TestDbGuard,
     test_server
 };
 use reqwest::Url;
+use sea_orm::DatabaseConnection;
+use zetachain_cctx_logic::client::Client;
 use zetachain_cctx_server::Settings;
 
 pub async fn init_db(db_prefix: &str, test_name: &str) -> TestDbGuard {
@@ -11,7 +15,9 @@ pub async fn init_db(db_prefix: &str, test_name: &str) -> TestDbGuard {
 }
 pub async fn init_zetachain_cctx_server<F>(
     db_url: String,
-    settings_setup: F
+    settings_setup: F,
+    db: Arc<DatabaseConnection>,
+    client: Arc<Client>,
 ) -> Url
 where
     F: Fn(Settings) -> Settings,
@@ -29,6 +35,6 @@ where
         (settings_setup(settings), base)
     };
 
-    test_server::init_server(|| zetachain_cctx_server::run(settings), &base).await;
+    test_server::init_server(|| zetachain_cctx_server::run(settings, db, client), &base).await;
     base
 }

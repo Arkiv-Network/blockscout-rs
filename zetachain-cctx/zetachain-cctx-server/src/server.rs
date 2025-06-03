@@ -12,6 +12,8 @@ use blockscout_service_launcher::{
     launcher::{self, GracefulShutdownHandler, LaunchSettings}, tracing};
 
 use migration::Migrator;
+use sea_orm::DatabaseConnection;
+use zetachain_cctx_logic::{client::Client, indexer::Indexer};
 
 use std::sync::Arc;
 
@@ -36,16 +38,14 @@ impl launcher::HttpRouter for Router {
     }
 }
 
-pub async fn run(settings: Settings) -> Result<(), anyhow::Error> {
+pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Client>) -> Result<(), anyhow::Error> {
     tracing::init_logs(SERVICE_NAME, &settings.tracing, &settings.jaeger)?;
 
     let health = Arc::new(HealthService::default());
 
-    
-    let _db_connection = database::initialize_postgres::<Migrator>(&settings.database).await?;
-    
+    let indexer = Indexer::new(settings.indexer, db, client);
 
-    // TODO: init services here
+    indexer.create_realtime_fetcher().await.unwrap();
 
     let router = Router {
         health,

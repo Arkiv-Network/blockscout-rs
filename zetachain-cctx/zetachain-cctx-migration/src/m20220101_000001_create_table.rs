@@ -6,6 +6,17 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+
+        manager.create_table(
+            Table::create()
+            .table(Watermark::Table)
+            .if_not_exists()
+            .col(ColumnDef::new(Watermark::Id).integer().not_null().auto_increment().primary_key())
+            .col(ColumnDef::new(Watermark::Realtime).string().not_null())
+            .col(ColumnDef::new(Watermark::Historical).string().not_null())
+            .to_owned(),
+        )
+        .await?;
         // Create cross_chain_txs table
         manager
             .create_table(
@@ -198,6 +209,13 @@ impl MigrationTrait for Migration {
     }
 }
 
+#[derive(Iden)]
+enum Watermark {
+    Table,
+    Id,
+    Realtime,
+    Historical,
+}
 /// Learn more at https://docs.rs/sea-query#iden
 #[derive(Iden)]
 enum CrossChainTx {

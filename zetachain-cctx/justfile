@@ -34,6 +34,7 @@ stop-test-postgres:
 
 run:
     ZETACHAIN_CCTX__DATABASE__CONNECT__URL={{DATABASE_URL}} \
+    CONFIG=zetachain-cctx-server/config/testnet.toml \
     cargo run --bin zetachain-cctx-server
 
 generate-entities:

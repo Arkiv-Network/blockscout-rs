@@ -9,3 +9,6 @@ path = "src/lib.rs"
 
 [dependencies]
 sea-orm = { workspace = true, features = [ "sqlx-postgres", "runtime-tokio-rustls", "macros" ] }
+serde = { workspace = true }
+
+[dev-dependencies]
