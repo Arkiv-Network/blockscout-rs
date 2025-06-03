@@ -12,6 +12,7 @@ pub struct Model {
     pub zeta_fees: String,
     #[sea_orm(column_type = "Text", nullable)]
     pub relayed_message: Option<String>,
+    pub last_status_update_timestamp: DateTime,
     pub protocol_contract_version: String,
 }
 

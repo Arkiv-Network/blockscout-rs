@@ -2,32 +2,37 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::task::JoinHandle;
-use zetachain_cctx_entity::types::{TxFinalizationStatus, WatermarkType};
+use zetachain_cctx_entity::sea_orm_active_enums::{TxFinalizationStatus, WatermarkType};
 use zetachain_cctx_entity::{
-    cross_chain_tx, cctx_status, inbound_params, outbound_params, revert_options,
-    prelude::*, watermark
+    cctx_status, cross_chain_tx, inbound_params, outbound_params, prelude::*, revert_options,
+    watermark
 };
 
+use sea_orm::{RelationTrait, ColumnTrait};
+
+use crate::{client::Client, models::CrossChainTx, settings::IndexerSettings};
 use chrono::Utc;
-use sea_orm::prelude::DateTime;
-use crate::{client::Client, settings::IndexerSettings, models::CrossChainTx};
-use sea_orm::ColumnTrait;
+
 use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use tracing::{instrument, Instrument};
+use futures::StreamExt;
 
+use futures::{stream::{select, select_with_strategy, BoxStream, PollNext}};  
 pub struct Indexer {
     pub settings: IndexerSettings,
     pub db: Arc<DatabaseConnection>,
     pub client: Arc<Client>,
 }
 
-
-
 enum IndexerJob {
-    StatusUpdate(String),//cctx index to be updated
-    GapFill(String), // Watermark (pointer) to the next page of cctxs to be fetched
+    StatusUpdate(String), //cctx index to be updated
+    GapFill(String),      // Watermark (pointer) to the next page of cctxs to be fetched
+    HistoricalDataFetch(String), // Watermark (pointer) to the next page of cctxs to be fetched
 }
 
+fn prio_left(_: &mut ()) -> PollNext {
+    PollNext::Left
+}
 impl Indexer {
     pub fn new(
         settings: IndexerSettings,
@@ -41,34 +46,93 @@ impl Indexer {
         }
     }
 
-
-    pub fn run(&self) {
-        let status_update_stream = Box::pin(async_stream::stream!{
+    pub async fn run(&self) {
+        let db = self.db.clone();
+        let status_update_stream = Box::pin(async_stream::stream! {
             loop {
-                //select cctx where execution_status is not final
-                //if there is no cctx, sleep for 1 second
+                //select cctx where outbound_params.tx_finalization_status is not final
                 //if there is cctx, yield the cctx index
                 //sleep for 1 second
                 //repeat
-                // let cctxs = cross_chain_tx::Entity::find()
-                //     .filter(cross_chain_tx::Column::ExecutionStatus.ne(ExecutionStatus::Final))
-                //     .order_by(cross_chain_tx::Column::Index.asc())
-                //     .limit(100)
-                //     .all(self.db.as_ref())
-                //     .await
-                //     .unwrap();
-                // for cctx in cctxs {
-                //     yield IndexerJob::StatusUpdate(cctx.index.to_string());
-                // }
+
+                let cctxs = cross_chain_tx::Entity::find()
+                    .join(sea_orm::JoinType::InnerJoin, cross_chain_tx::Relation::OutboundParams.def())
+                    .filter(outbound_params::Column::TxFinalizationStatus.ne(TxFinalizationStatus::Executed))
+                    .filter(cross_chain_tx::Column::LastStatusUpdateTimestamp.lt(Utc::now() - Duration::from_secs(60)))
+                    .all(db.as_ref())
+                    .await
+                    .unwrap();
+
+                for cctx in cctxs {
+                    yield IndexerJob::StatusUpdate(cctx.index.to_string());
+                }
+
                 tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
             }
         });
+
+        let db = self.db.clone();
+        let gap_fill_stream = Box::pin(async_stream::stream! {
+            loop {
+                
+                let watermarks = watermark::Entity::find()
+                    .filter(watermark::Column::WatermarkType.eq(WatermarkType::Realtime))
+                    .all(db.as_ref())
+                    .await
+                    .unwrap();
+
+                for watermark in watermarks {
+                    yield IndexerJob::GapFill(watermark.pointer);
+                }
+
+                tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
+            }
+        });
+
+        let db = self.db.clone();
+        let historical_stream = Box::pin(async_stream::stream! {
+            loop {
+                let watermarks = watermark::Entity::find()
+                    .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
+                    .all(db.as_ref())
+                    .await
+                    .unwrap();
+
+                for watermark in watermarks {
+                    yield IndexerJob::HistoricalDataFetch(watermark.pointer);
+                }
+
+                tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
+            }
+        });
+
+        let combined_stream = select_with_strategy(status_update_stream, gap_fill_stream, prio_left);
+        let combined_stream = select_with_strategy(combined_stream, historical_stream, prio_left);
+
+        combined_stream.for_each_concurrent(Some(self.settings.concurrency as usize), |job| {
+            tokio::spawn(async move {
+                match job {
+                    IndexerJob::StatusUpdate(cctx_index) => {
+                        tracing::info!(cctx_index = %cctx_index, "Status update");
+                    }
+                    IndexerJob::GapFill(watermark) => {
+                        tracing::info!(watermark = %watermark, "Gap fill");
+                    }
+                    IndexerJob::HistoricalDataFetch(watermark) => {
+                        tracing::info!(watermark = %watermark, "Historical sync");
+                    }
+                }
+                
+            });
+            futures::future::ready(())
+        }).await;
     }
 
-    
-
     #[instrument(skip(db, tx), fields(tx_index = %tx.index))]
-    async fn insert_transaction(db: Arc<DatabaseConnection>, tx: CrossChainTx) -> anyhow::Result<()> {
+    async fn insert_transaction(
+        db: Arc<DatabaseConnection>,
+        tx: CrossChainTx,
+    ) -> anyhow::Result<()> {
         // Insert main cross_chain_tx record
         let tx_model = cross_chain_tx::ActiveModel {
             id: ActiveValue::NotSet,
@@ -76,16 +140,15 @@ impl Indexer {
             index: ActiveValue::Set(tx.index),
             zeta_fees: ActiveValue::Set(tx.zeta_fees),
             relayed_message: ActiveValue::Set(Some(tx.relayed_message)),
-            protocol_contract_version: ActiveValue::Set(
-                tx.protocol_contract_version,
-            )
+            protocol_contract_version: ActiveValue::Set(tx.protocol_contract_version),
+            last_status_update_timestamp: ActiveValue::NotSet,
         };
-        
+
         let tx_result = cross_chain_tx::Entity::insert(tx_model)
             .on_conflict(
                 sea_orm::sea_query::OnConflict::column(cross_chain_tx::Column::Index)
                     .do_nothing()
-                    .to_owned()
+                    .to_owned(),
             )
             .exec(db.as_ref())
             .instrument(tracing::info_span!("insert_tx"))
@@ -126,7 +189,10 @@ impl Indexer {
             observed_external_height: ActiveValue::Set(tx.inbound_params.observed_external_height),
             ballot_index: ActiveValue::Set(tx.inbound_params.ballot_index),
             finalized_zeta_height: ActiveValue::Set(tx.inbound_params.finalized_zeta_height),
-            tx_finalization_status: ActiveValue::Set(TxFinalizationStatus::from(tx.inbound_params.tx_finalization_status)),
+            tx_finalization_status: ActiveValue::Set(
+                TxFinalizationStatus::try_from(tx.inbound_params.tx_finalization_status)
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            ),
             is_cross_chain_call: ActiveValue::Set(tx.inbound_params.is_cross_chain_call),
             status: ActiveValue::Set(tx.inbound_params.status),
             confirmation_mode: ActiveValue::Set(tx.inbound_params.confirmation_mode),
@@ -156,9 +222,14 @@ impl Indexer {
                 effective_gas_price: ActiveValue::Set(outbound.effective_gas_price),
                 effective_gas_limit: ActiveValue::Set(outbound.effective_gas_limit),
                 tss_pubkey: ActiveValue::Set(outbound.tss_pubkey),
-                tx_finalization_status: ActiveValue::Set(TxFinalizationStatus::from(outbound.tx_finalization_status)),
+                tx_finalization_status: ActiveValue::Set(
+                    TxFinalizationStatus::try_from(outbound.tx_finalization_status)
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                ),
                 call_options_gas_limit: ActiveValue::Set(outbound.call_options.gas_limit),
-                call_options_is_arbitrary_call: ActiveValue::Set(outbound.call_options.is_arbitrary_call),
+                call_options_is_arbitrary_call: ActiveValue::Set(
+                    outbound.call_options.is_arbitrary_call,
+                ),
                 confirmation_mode: ActiveValue::Set(outbound.confirmation_mode),
             };
             outbound_params::Entity::insert(outbound_model)
@@ -185,7 +256,6 @@ impl Indexer {
         Ok(())
     }
 
-    
     #[instrument(skip(self))]
     pub fn create_realtime_fetcher(&self) -> JoinHandle<()> {
         let db = self.db.clone();
@@ -215,7 +285,6 @@ impl Indexer {
                         .one(db.as_ref())
                         .await
                         .unwrap();
-                    
 
                     if last_cctx.is_none() {
                         //there might be a gap, so we need to save pagination.next_key as a starting point for the gap-filling process

@@ -7,5 +7,6 @@ pub mod cross_chain_tx;
 pub mod inbound_params;
 pub mod outbound_params;
 pub mod revert_options;
-pub mod types;
+pub mod sea_orm_active_enums;
 pub mod watermark;
+pub mod enum_conversions;

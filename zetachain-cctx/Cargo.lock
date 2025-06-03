@@ -5525,6 +5525,7 @@ dependencies = [
  "blockscout-display-bytes",
  "blockscout-service-launcher",
  "chrono",
+ "futures",
  "governor",
  "pretty_assertions",
  "reqwest",

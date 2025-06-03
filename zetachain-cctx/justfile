@@ -38,7 +38,8 @@ run:
     cargo run --bin zetachain-cctx-server
 
 generate-entities:
-    sea-orm-cli generate entity --lib -o zetachain-cctx-entity/src
+    sea-orm-cli generate entity --lib -o zetachain-cctx-entity/src && \
+    echo "pub mod enum_conversions;" >> zetachain-cctx-entity/src/lib.rs
 
 new-migration name:
     sea-orm-cli migrate generate -d zetachain-cctx-migration {{name}}
