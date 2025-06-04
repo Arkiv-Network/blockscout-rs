@@ -28,17 +28,138 @@ pub struct Indexer {
 }
 
 enum IndexerJob {
-    StatusUpdate(String,i32),        //cctx index and id to be updated
-    GapFill(String),             // Watermark (pointer) to the next page of cctxs to be fetched
-    HistoricalDataFetch(String), // Watermark (pointer) to the next page of cctxs to be fetched
+    StatusUpdate(String, i32),             //cctx index and id to be updated
+    GapFill(watermark::Model), // Watermark (pointer) to the next page of cctxs to be fetched
+    HistoricalDataFetch(watermark::Model), // Watermark (pointer) to the next page of cctxs to be fetched
 }
 
-
-#[instrument(skip(db, tx), fields(tx_index = %tx.index))]
-async fn insert_transaction<C: ConnectionTrait>(
-    db: &C,
-    tx: CrossChainTx,
+async fn update_cctx_status(
+    db: &DatabaseConnection,
+    client: &Client,
+    index: String,
+    id: i32,
 ) -> anyhow::Result<()> {
+    //get cctx from client then update outbound params in the database
+    let cctx = client.get_cctx(&index).await.unwrap();
+    let outbound_params = cctx.outbound_params;
+
+    for outbound in outbound_params {
+        //upsert outbound params based on hash field
+        let outbound_model = outbound_params::ActiveModel {
+            id: ActiveValue::NotSet,
+            cross_chain_tx_id: ActiveValue::Set(id),
+            receiver: ActiveValue::Set(outbound.receiver),
+            receiver_chain_id: ActiveValue::Set(outbound.receiver_chain_id),
+            coin_type: ActiveValue::Set(outbound.coin_type),
+            amount: ActiveValue::Set(outbound.amount),
+            tss_nonce: ActiveValue::Set(outbound.tss_nonce),
+            gas_limit: ActiveValue::Set(outbound.gas_limit),
+            gas_price: ActiveValue::Set(Some(outbound.gas_price)),
+            gas_priority_fee: ActiveValue::Set(Some(outbound.gas_priority_fee)),
+            hash: ActiveValue::Set(Some(outbound.hash)),
+            ballot_index: ActiveValue::Set(Some(outbound.ballot_index)),
+            observed_external_height: ActiveValue::Set(outbound.observed_external_height),
+            gas_used: ActiveValue::Set(outbound.gas_used),
+            effective_gas_price: ActiveValue::Set(outbound.effective_gas_price),
+            effective_gas_limit: ActiveValue::Set(outbound.effective_gas_limit),
+            tss_pubkey: ActiveValue::Set(outbound.tss_pubkey),
+            tx_finalization_status: ActiveValue::Set(
+                TxFinalizationStatus::try_from(outbound.tx_finalization_status)
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            ),
+            call_options_gas_limit: ActiveValue::Set(outbound.call_options.gas_limit),
+            call_options_is_arbitrary_call: ActiveValue::Set(
+                outbound.call_options.is_arbitrary_call,
+            ),
+            confirmation_mode: ActiveValue::Set(outbound.confirmation_mode),
+        };
+        outbound_params::Entity::insert(outbound_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(outbound_params::Column::Hash)
+                    .update_columns([
+                        outbound_params::Column::TxFinalizationStatus,
+                        outbound_params::Column::GasUsed,
+                        outbound_params::Column::EffectiveGasPrice,
+                        outbound_params::Column::EffectiveGasLimit,
+                        outbound_params::Column::TssNonce,
+                    ])
+                    .to_owned(),
+            )
+            .exec(db)
+            .await?;
+    }
+
+    Ok(())
+}
+async fn gap_fill(
+    db: &DatabaseConnection,
+    client: &Client,
+    watermark: watermark::Model,
+) -> anyhow::Result<()> {
+    let pointer = watermark.pointer;
+
+    let response = client.list_cctx(Some(pointer), true, 100).await.unwrap();
+    let cctxs = response.cross_chain_tx;
+    let last_cctx = cctxs.last().unwrap();
+    let last_cctx = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq(&last_cctx.index))
+        .one(db)
+        .await
+        .unwrap();
+
+    //begin transaction
+    let tx = db.begin().await?;
+
+    //insert transactions
+
+    if last_cctx.is_none() {
+        //update watermark pointer to the next key and unlock
+        watermark::Entity::update(watermark::ActiveModel {
+            id: ActiveValue::Set(watermark.id),
+            pointer: ActiveValue::Set(response.pagination.next_key),
+            lock: ActiveValue::Set(false),
+            updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+            ..Default::default()
+        })
+        .filter(watermark::Column::Id.eq(watermark.id))
+        .exec(&tx)
+        .await?;
+    }
+    //insert transactions
+    for cctx in cctxs {
+        insert_transaction(&tx, cctx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn historical_sync(db: &DatabaseConnection, client: &Client, watermark: watermark::Model) -> anyhow::Result<()> {
+    let pointer = watermark.pointer;
+
+    let response = client.list_cctx(Some(pointer), true, 100).await.unwrap();
+    let cctxs = response.cross_chain_tx;
+    
+    //atomically insert cctxs and update watermark
+    let tx = db.begin().await?;
+
+    for cctx in cctxs {
+        insert_transaction(&tx, cctx).await?;
+    }
+    watermark::Entity::update(watermark::ActiveModel {
+        id: ActiveValue::Set(watermark.id),
+        pointer: ActiveValue::Set(response.pagination.next_key),
+        lock: ActiveValue::Set(false),
+        updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        ..Default::default()
+    })
+    .filter(watermark::Column::Id.eq(watermark.id))
+    .exec(&tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+#[instrument(skip(db, tx), fields(tx_index = %tx.index))]
+async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> anyhow::Result<()> {
     // Insert main cross_chain_tx record
     let tx_model = cross_chain_tx::ActiveModel {
         id: ActiveValue::NotSet,
@@ -209,12 +330,25 @@ impl Indexer {
 
                 let watermarks = watermark::Entity::find()
                     .filter(watermark::Column::WatermarkType.eq(WatermarkType::Realtime))
+                    .filter(watermark::Column::Lock.eq(false))
+                    .filter(watermark::Column::UpdatedAt.lt(Utc::now() - Duration::from_secs(10))) //TODO: make it configurable
                     .all(db.as_ref())
                     .await
                     .unwrap();
 
                 for watermark in watermarks {
-                    yield IndexerJob::GapFill(watermark.pointer);
+                    //update watermark lock to true
+                    watermark::Entity::update(watermark::ActiveModel {
+                        id: ActiveValue::Set(watermark.id),
+                        lock: ActiveValue::Set(true),
+                        ..Default::default()
+                    })
+                    .filter(watermark::Column::Id.eq(watermark.id))
+                    .exec(db.as_ref())
+                    .await
+                    .unwrap();
+
+                    yield IndexerJob::GapFill(watermark);
                 }
 
                 tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
@@ -226,12 +360,12 @@ impl Indexer {
             loop {
                 let watermarks = watermark::Entity::find()
                     .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
-                    .all(db.as_ref())
+                    .one(db.as_ref())
                     .await
                     .unwrap();
 
-                for watermark in watermarks {
-                    yield IndexerJob::HistoricalDataFetch(watermark.pointer);
+                if let Some(watermark) = watermarks {
+                    yield IndexerJob::HistoricalDataFetch(watermark);
                 }
 
                 tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
@@ -248,16 +382,22 @@ impl Indexer {
 
         combined_stream
             .for_each_concurrent(Some(self.settings.concurrency as usize), |job| {
+                let client = self.client.clone();
+                let db = self.db.clone();
                 tokio::spawn(async move {
                     match job {
                         IndexerJob::StatusUpdate(cctx_index, cctx_id) => {
                             tracing::info!(cctx_index = %cctx_index, "Status update");
+                            update_cctx_status(&db, &client, cctx_index, cctx_id)
+                                .await
+                                .unwrap();
                         }
                         IndexerJob::GapFill(watermark) => {
-                            tracing::info!(watermark = %watermark, "Gap fill");
+                            tracing::info!(watermark = %watermark.pointer, "Gap fill");
+                            gap_fill(&db, &client, watermark).await.unwrap();
                         }
                         IndexerJob::HistoricalDataFetch(watermark) => {
-                            tracing::info!(watermark = %watermark, "Historical sync");
+                            tracing::info!(watermark = %watermark.pointer, "Historical sync");
                         }
                     }
                 });
@@ -266,100 +406,6 @@ impl Indexer {
             .await;
     }
 
-    async fn update_cctx_status(&self, index: String, id: i32) -> anyhow::Result<()> {
-        let db = self.db.clone();
-        //get cctx from client then update outbound params in the database
-        let cctx = self.client.get_cctx(&index).await.unwrap();
-        let outbound_params = cctx.outbound_params;
-        
-        for outbound in outbound_params {
-            //upsert outbound params based on hash field
-            let outbound_model = outbound_params::ActiveModel {
-                id: ActiveValue::NotSet,
-                cross_chain_tx_id: ActiveValue::Set(id),
-                receiver: ActiveValue::Set(outbound.receiver),
-                receiver_chain_id: ActiveValue::Set(outbound.receiver_chain_id),
-                coin_type: ActiveValue::Set(outbound.coin_type),
-                amount: ActiveValue::Set(outbound.amount),
-                tss_nonce: ActiveValue::Set(outbound.tss_nonce),
-                gas_limit: ActiveValue::Set(outbound.gas_limit),
-                gas_price: ActiveValue::Set(Some(outbound.gas_price)),
-                gas_priority_fee: ActiveValue::Set(Some(outbound.gas_priority_fee)),
-                hash: ActiveValue::Set(Some(outbound.hash)),
-                ballot_index: ActiveValue::Set(Some(outbound.ballot_index)),
-                observed_external_height: ActiveValue::Set(outbound.observed_external_height),
-                gas_used: ActiveValue::Set(outbound.gas_used),
-                effective_gas_price: ActiveValue::Set(outbound.effective_gas_price),
-                effective_gas_limit: ActiveValue::Set(outbound.effective_gas_limit),
-                tss_pubkey: ActiveValue::Set(outbound.tss_pubkey),
-                tx_finalization_status: ActiveValue::Set(
-                    TxFinalizationStatus::try_from(outbound.tx_finalization_status)
-                        .map_err(|e| anyhow::anyhow!(e))?,
-                ),
-                call_options_gas_limit: ActiveValue::Set(outbound.call_options.gas_limit),
-                call_options_is_arbitrary_call: ActiveValue::Set(
-                    outbound.call_options.is_arbitrary_call,
-                ),
-                confirmation_mode: ActiveValue::Set(outbound.confirmation_mode),
-            };
-            outbound_params::Entity::insert(outbound_model)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(outbound_params::Column::Hash)
-                        .update_columns([
-                            outbound_params::Column::TxFinalizationStatus,
-                            outbound_params::Column::GasUsed,
-                            outbound_params::Column::EffectiveGasPrice,
-                            outbound_params::Column::EffectiveGasLimit,
-                            outbound_params::Column::TssNonce,
-                        ])
-                        .to_owned(),
-                )
-                .exec(db.as_ref())
-                .await?;
-        }
-
-        Ok(())
-    }
-
-    async fn gap_fill(&self, watermark: watermark::Model) -> anyhow::Result<()> {
-        let db = self.db.clone();
-
-        let pointer = watermark.pointer;
-
-        let response = self.client.list_cctx(Some(pointer), true, 100).await.unwrap();
-        let cctxs = response.cross_chain_tx;
-        let last_cctx = cctxs.last().unwrap();
-        let last_cctx = cross_chain_tx::Entity::find()
-            .filter(cross_chain_tx::Column::Index.eq(&last_cctx.index))
-            .one(db.as_ref())
-            .await
-            .unwrap();
-            
-        //begin transaction
-        let tx = db.begin().await?;
-
-        //insert transactions
-        
-            if last_cctx.is_none() {
-                //update watermark pointer to the next key and unlock
-                watermark::Entity::update(watermark::ActiveModel {
-                    id: ActiveValue::Set(watermark.id),
-                    pointer: ActiveValue::Set(response.pagination.next_key),
-                    lock: ActiveValue::Set(false),
-                    updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
-                    ..Default::default()
-                })
-                .exec(&tx)
-                .await?;
-            }
-            //insert transactions
-            for cctx in cctxs {
-                insert_transaction(&tx, cctx).await?;
-            }
-            tx.commit().await?;
-            Ok(())
-    }
-   
     #[instrument(skip(self))]
     pub fn create_realtime_fetcher(&self) -> JoinHandle<()> {
         let db = self.db.clone();

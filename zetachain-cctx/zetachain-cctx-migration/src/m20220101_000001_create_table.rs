@@ -38,7 +38,9 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(Watermark::Pointer).string().not_null())
-                    
+                    .col(ColumnDef::new(Watermark::Lock).boolean().not_null().default(false))
+                    .col(ColumnDef::new(Watermark::CreatedAt).date_time().default(Expr::current_timestamp()).not_null())
+                    .col(ColumnDef::new(Watermark::UpdatedAt).date_time().default(Expr::current_timestamp()).not_null())
                     .to_owned(),
             )
             .await?;
@@ -373,6 +375,9 @@ enum Watermark {
     Id,
     WatermarkType,
     Pointer,
+    Lock,
+    CreatedAt,
+    UpdatedAt,
 }
 /// Learn more at https://docs.rs/sea-query#iden
 #[derive(Iden)]
