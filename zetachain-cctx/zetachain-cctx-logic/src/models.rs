@@ -1,9 +1,15 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ServiceResponse {
+pub struct PagedCCTXResponse {
     pub cross_chain_tx: Vec<CrossChainTx>,
     pub pagination: Pagination,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CCTXResponse {
+    #[serde(rename = "CrossChainTx")]
+    pub cross_chain_tx: CrossChainTx,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use anyhow::Error;
 use tokio::time::timeout;
 
-use crate::models::ServiceResponse;
+use crate::models::{CCTXResponse, CrossChainTx, PagedCCTXResponse};
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -76,8 +76,19 @@ impl Client {
         ))
     }
 
-    pub async fn list_cctx(&self, pagination_key: Option<String>, unordered: bool, pagination_limit: u32) -> Result<ServiceResponse, Error> {
+    pub async fn get_cctx(&self, index: &str) -> anyhow::Result<CrossChainTx> {
         let mut url:Url = self.settings.url.parse().unwrap();
+        url.set_path("/cctx");
+        url.set_fragment(Some(&index));
+        let request = Request::new(Method::GET, url);
+        let response = self.make_request(request).await?.error_for_status()?;
+        let body = response.json::<CCTXResponse>().await?;
+        Ok(body.cross_chain_tx)
+    }
+
+    pub async fn list_cctx(&self, pagination_key: Option<String>, unordered: bool, pagination_limit: u32) -> Result<PagedCCTXResponse, Error> {
+        let mut url:Url = self.settings.url.parse().unwrap();
+        url.set_path("/cctx");
         url.query_pairs_mut()
         
         .append_pair("pagination.limit", &pagination_limit.to_string())
@@ -90,7 +101,7 @@ impl Client {
 
         let request = Request::new(Method::GET, url);
         let response = self.make_request(request).await?.error_for_status()?;
-        let body = response.json::<ServiceResponse>().await?;
+        let body = response.json::<PagedCCTXResponse>().await?;
         Ok(body)
     }
 }
