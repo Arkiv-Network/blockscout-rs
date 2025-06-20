@@ -8,10 +8,8 @@ use crate::{
     settings::Settings,
 };
 use blockscout_service_launcher::{
-    database,
     launcher::{self, GracefulShutdownHandler, LaunchSettings}, tracing};
 
-use migration::Migrator;
 use sea_orm::DatabaseConnection;
 use zetachain_cctx_logic::{client::Client, indexer::Indexer};
 
@@ -45,7 +43,7 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
 
     let indexer = Indexer::new(settings.indexer, db, client);
 
-    indexer.create_realtime_fetcher().await.unwrap();
+    indexer.run().await;
 
     let router = Router {
         health,

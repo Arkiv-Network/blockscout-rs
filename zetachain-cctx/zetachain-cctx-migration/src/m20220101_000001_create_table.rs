@@ -60,6 +60,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(CrossChainTx::Creator).string().not_null())
                     .col(ColumnDef::new(CrossChainTx::Index).string().not_null())
                     .col(ColumnDef::new(CrossChainTx::ZetaFees).string().not_null())
+                    .col(ColumnDef::new(CrossChainTx::Lock).boolean().not_null().default(false))
                     .col(ColumnDef::new(CrossChainTx::RelayedMessage).text().null())
                     .col(ColumnDef::new(CrossChainTx::LastStatusUpdateTimestamp).date_time().default(Expr::current_timestamp()).not_null())
                     .col(
@@ -387,6 +388,7 @@ enum CrossChainTx {
     Creator,
     Index,
     ZetaFees,
+    Lock,
     RelayedMessage,
     ProtocolContractVersion,
     LastStatusUpdateTimestamp,

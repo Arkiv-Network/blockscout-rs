@@ -1,7 +1,6 @@
 use std::thread;
 use serde::Deserialize;
 
-use crate::client::RpcSettings;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

@@ -5,7 +5,7 @@ use anyhow::Ok;
 use tokio::task::JoinHandle;
 use zetachain_cctx_entity::sea_orm_active_enums::{TxFinalizationStatus, WatermarkType};
 use zetachain_cctx_entity::{
-    cctx_status, cross_chain_tx, inbound_params, outbound_params, prelude::*, revert_options,
+    cctx_status, cross_chain_tx, inbound_params, outbound_params, revert_options,
     watermark,
 };
 
@@ -15,12 +15,12 @@ use crate::{client::Client, models::CrossChainTx, settings::IndexerSettings};
 use chrono::Utc;
 
 use futures::StreamExt;
-use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
 use tracing::{instrument, Instrument};
 
 use sea_orm::TransactionTrait;
 
-use futures::stream::{select, select_with_strategy, BoxStream, PollNext};
+use futures::stream::{select_with_strategy, PollNext};
 pub struct Indexer {
     pub settings: IndexerSettings,
     pub db: Arc<DatabaseConnection>,
@@ -39,54 +39,32 @@ async fn update_cctx_status(
     index: String,
     id: i32,
 ) -> anyhow::Result<()> {
-    //get cctx from client then update outbound params in the database
+    //get the most recent cctx data from the client and update corresponding child record of cctx (outbound params)
     let cctx = client.get_cctx(&index).await.unwrap();
     let outbound_params = cctx.outbound_params;
 
     for outbound in outbound_params {
-        //upsert outbound params based on hash field
-        let outbound_model = outbound_params::ActiveModel {
-            id: ActiveValue::NotSet,
-            cross_chain_tx_id: ActiveValue::Set(id),
-            receiver: ActiveValue::Set(outbound.receiver),
-            receiver_chain_id: ActiveValue::Set(outbound.receiver_chain_id),
-            coin_type: ActiveValue::Set(outbound.coin_type),
-            amount: ActiveValue::Set(outbound.amount),
-            tss_nonce: ActiveValue::Set(outbound.tss_nonce),
-            gas_limit: ActiveValue::Set(outbound.gas_limit),
-            gas_price: ActiveValue::Set(Some(outbound.gas_price)),
-            gas_priority_fee: ActiveValue::Set(Some(outbound.gas_priority_fee)),
-            hash: ActiveValue::Set(Some(outbound.hash)),
-            ballot_index: ActiveValue::Set(Some(outbound.ballot_index)),
-            observed_external_height: ActiveValue::Set(outbound.observed_external_height),
-            gas_used: ActiveValue::Set(outbound.gas_used),
-            effective_gas_price: ActiveValue::Set(outbound.effective_gas_price),
-            effective_gas_limit: ActiveValue::Set(outbound.effective_gas_limit),
-            tss_pubkey: ActiveValue::Set(outbound.tss_pubkey),
-            tx_finalization_status: ActiveValue::Set(
-                TxFinalizationStatus::try_from(outbound.tx_finalization_status)
-                    .map_err(|e| anyhow::anyhow!(e))?,
-            ),
-            call_options_gas_limit: ActiveValue::Set(outbound.call_options.gas_limit),
-            call_options_is_arbitrary_call: ActiveValue::Set(
-                outbound.call_options.is_arbitrary_call,
-            ),
-            confirmation_mode: ActiveValue::Set(outbound.confirmation_mode),
-        };
-        outbound_params::Entity::insert(outbound_model)
-            .on_conflict(
-                sea_orm::sea_query::OnConflict::column(outbound_params::Column::Hash)
-                    .update_columns([
-                        outbound_params::Column::TxFinalizationStatus,
-                        outbound_params::Column::GasUsed,
-                        outbound_params::Column::EffectiveGasPrice,
-                        outbound_params::Column::EffectiveGasLimit,
-                        outbound_params::Column::TssNonce,
-                    ])
-                    .to_owned(),
-            )
-            .exec(db)
-            .await?;
+
+        if let Some(record) = outbound_params::Entity::find()
+            .filter(outbound_params::Column::CrossChainTxId.eq(Some(id)))
+            .filter(outbound_params::Column::Receiver.eq(outbound.receiver))
+            .one(db)
+            .await
+            .unwrap() {
+                outbound_params::Entity::update(outbound_params::ActiveModel {
+                    id: ActiveValue::Set(record.id),
+                    tx_finalization_status: ActiveValue::Set(TxFinalizationStatus::try_from(outbound.tx_finalization_status)
+                        .map_err(|e| anyhow::anyhow!(e))?),
+                    gas_used: ActiveValue::Set(outbound.gas_used),
+                    effective_gas_price: ActiveValue::Set(outbound.effective_gas_price),
+                    effective_gas_limit: ActiveValue::Set(outbound.effective_gas_limit),
+                    tss_nonce: ActiveValue::Set(outbound.tss_nonce),
+                    ..Default::default()
+                })
+                .filter(outbound_params::Column::Id.eq(record.id))
+                .exec(db)
+                .await?;
+            }
     }
 
     Ok(())
@@ -96,8 +74,8 @@ async fn gap_fill(
     client: &Client,
     watermark: watermark::Model,
 ) -> anyhow::Result<()> {
-    let pointer = watermark.pointer;
 
+    let pointer = watermark.pointer;
     let response = client.list_cctx(Some(pointer), true, 100).await.unwrap();
     let cctxs = response.cross_chain_tx;
     let last_cctx = cctxs.last().unwrap();
@@ -149,7 +127,7 @@ async fn historical_sync(db: &DatabaseConnection, client: &Client, watermark: wa
         id: ActiveValue::Set(watermark.id),
         pointer: ActiveValue::Set(response.pagination.next_key),
         lock: ActiveValue::Set(false),
-        updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        updated_at: ActiveValue::Set(Utc::now().naive_utc()),
         ..Default::default()
     })
     .filter(watermark::Column::Id.eq(watermark.id))
@@ -161,17 +139,18 @@ async fn historical_sync(db: &DatabaseConnection, client: &Client, watermark: wa
 #[instrument(skip(db, tx), fields(tx_index = %tx.index))]
 async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> anyhow::Result<()> {
     // Insert main cross_chain_tx record
-    let tx_model = cross_chain_tx::ActiveModel {
+    let cctx_model = cross_chain_tx::ActiveModel {
         id: ActiveValue::NotSet,
         creator: ActiveValue::Set(tx.creator),
         index: ActiveValue::Set(tx.index),
+        lock: ActiveValue::Set(false),
         zeta_fees: ActiveValue::Set(tx.zeta_fees),
         relayed_message: ActiveValue::Set(Some(tx.relayed_message)),
         protocol_contract_version: ActiveValue::Set(tx.protocol_contract_version),
-        last_status_update_timestamp: ActiveValue::NotSet,
+        last_status_update_timestamp: ActiveValue::Set(Utc::now().naive_utc()),
     };
 
-    let tx_result = cross_chain_tx::Entity::insert(tx_model)
+    let tx_result = cross_chain_tx::Entity::insert(cctx_model)
         .on_conflict(
             sea_orm::sea_query::OnConflict::column(cross_chain_tx::Column::Index)
                 .do_nothing()
@@ -301,22 +280,28 @@ impl Indexer {
 
     pub async fn run(&self) {
         let db = self.db.clone();
+        // select cctxs where outbound_params.tx_finalization_status is not final
         let status_update_stream = Box::pin(async_stream::stream! {
             loop {
-                //select cctx where outbound_params.tx_finalization_status is not final
-                //if there is cctx, yield the cctx index
-                //sleep for 1 second
-                //repeat
-
                 let cctxs = cross_chain_tx::Entity::find()
                     .join(sea_orm::JoinType::InnerJoin, cross_chain_tx::Relation::OutboundParams.def())
                     .filter(outbound_params::Column::TxFinalizationStatus.ne(TxFinalizationStatus::Executed))
                     .filter(cross_chain_tx::Column::LastStatusUpdateTimestamp.lt(Utc::now() - Duration::from_secs(60)))
+                    .filter(cross_chain_tx::Column::Lock.eq(false))
                     .all(db.as_ref())
                     .await
                     .unwrap();
 
                 for cctx in cctxs {
+                    tracing::info!(cctx_index = %cctx.index, "Status update");
+                    cross_chain_tx::Entity::update(cross_chain_tx::ActiveModel {
+                        id: ActiveValue::Set(cctx.id),
+                        last_status_update_timestamp: ActiveValue::Set(Utc::now().naive_utc()),
+                        ..Default::default()
+                    })
+                    .filter(cross_chain_tx::Column::Id.eq(cctx.id))
+                    .exec(db.as_ref())
+                    .await.unwrap();
                     yield IndexerJob::StatusUpdate(cctx.index.to_string(), cctx.id);
                 }
 
@@ -325,6 +310,7 @@ impl Indexer {
         });
 
         let db = self.db.clone();
+        // checks whether the realtme fetcher hasn't actually fetched all the data in a single request, so we might be lagging behind
         let gap_fill_stream = Box::pin(async_stream::stream! {
             loop {
 
@@ -398,6 +384,7 @@ impl Indexer {
                         }
                         IndexerJob::HistoricalDataFetch(watermark) => {
                             tracing::info!(watermark = %watermark.pointer, "Historical sync");
+                            historical_sync(&db, &client, watermark).await.unwrap();
                         }
                     }
                 });
@@ -407,11 +394,11 @@ impl Indexer {
     }
 
     #[instrument(skip(self))]
-    pub fn create_realtime_fetcher(&self) -> JoinHandle<()> {
+    pub fn realtime_fetcher(&self) -> JoinHandle<()> {
         let db = self.db.clone();
         let client = self.client.clone();
         let polling_interval = self.settings.polling_interval;
-        let realtime_fetcher = tokio::spawn(async move {
+        tokio::spawn(async move {
             loop {
                 let response = client.list_cctx(None, false, 100).await.unwrap();
                 let txs = response.cross_chain_tx;
@@ -462,7 +449,6 @@ impl Indexer {
 
                 tokio::time::sleep(Duration::from_millis(polling_interval)).await;
             }
-        });
-        realtime_fetcher
+        })
     }
 }

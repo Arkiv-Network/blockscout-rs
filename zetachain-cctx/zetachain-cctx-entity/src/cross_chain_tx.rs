@@ -10,6 +10,7 @@ pub struct Model {
     pub creator: String,
     pub index: String,
     pub zeta_fees: String,
+    pub lock: bool,
     #[sea_orm(column_type = "Text", nullable)]
     pub relayed_message: Option<String>,
     pub last_status_update_timestamp: DateTime,

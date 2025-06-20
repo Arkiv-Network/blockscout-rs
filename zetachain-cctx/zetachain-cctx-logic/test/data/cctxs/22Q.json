@@ -1,0 +1,203 @@
+{
+    "CrossChainTx": [
+        {
+            "creator": "zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm",
+            "index": "0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31",
+            "zeta_fees": "0",
+            "relayed_message": "",
+            "cctx_status": {
+                "status": "OutboundMined",
+                "status_message": "",
+                "error_message": "",
+                "lastUpdate_timestamp": "1750344684",
+                "isAbortRefunded": false,
+                "created_timestamp": "1750344684",
+                "error_message_revert": "",
+                "error_message_abort": ""
+            },
+            "inbound_params": {
+                "sender": "tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67",
+                "sender_chain_id": "18333",
+                "tx_origin": "tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67",
+                "coin_type": "Gas",
+                "asset": "",
+                "amount": "8504",
+                "observed_hash": "ed64294c274f4c8204f9c8e8495495b839c59d3944bfcf51ec8ad6d3d5721e38",
+                "observed_external_height": "257082",
+                "ballot_index": "0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31",
+                "finalized_zeta_height": "10966764",
+                "tx_finalization_status": "Executed",
+                "is_cross_chain_call": false,
+                "status": "SUCCESS",
+                "confirmation_mode": "SAFE"
+            },
+            "outbound_params": [
+                {
+                    "receiver": "0x33c2f2B93798629f1311cA9ade3D4BF732011718",
+                    "receiver_chainId": "7001",
+                    "coin_type": "Gas",
+                    "amount": "0",
+                    "tss_nonce": "0",
+                    "gas_limit": "0",
+                    "gas_price": "",
+                    "gas_priority_fee": "",
+                    "hash": "0xcd6c1391ca9950bb527b36b21ac75bccd29e7a2adf105662cb5eadd4bda5b4d5",
+                    "ballot_index": "",
+                    "observed_external_height": "10966764",
+                    "gas_used": "0",
+                    "effective_gas_price": "0",
+                    "effective_gas_limit": "0",
+                    "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
+                    "tx_finalization_status": "Executed",
+                    "call_options": {
+                        "gas_limit": "0",
+                        "is_arbitrary_call": false
+                    },
+                    "confirmation_mode": "SAFE"
+                }
+            ],
+            "protocol_contract_version": "V2",
+            "revert_options": {
+                "revert_address": "",
+                "call_on_revert": false,
+                "abort_address": "",
+                "revert_message": null,
+                "revert_gas_limit": "0"
+            }
+        },
+        {
+            "creator": "",
+            "index": "0xf7b98c51a222d1499001eaa98004d7ee6ebebbdc46597d2d03197e8b0e7e16b2",
+            "zeta_fees": "0",
+            "relayed_message": "",
+            "cctx_status": {
+                "status": "OutboundMined",
+                "status_message": "",
+                "error_message": "",
+                "lastUpdate_timestamp": "1750344706",
+                "isAbortRefunded": false,
+                "created_timestamp": "1750344287",
+                "error_message_revert": "",
+                "error_message_abort": ""
+            },
+            "inbound_params": {
+                "sender": "0x58A8Ba18c585C411B95Ba1e78962a2A3E1c6f52a",
+                "sender_chain_id": "7001",
+                "tx_origin": "0x58A8Ba18c585C411B95Ba1e78962a2A3E1c6f52a",
+                "coin_type": "Gas",
+                "asset": "",
+                "amount": "900000",
+                "observed_hash": "0xa6e706fb088fb81598697da4eb0efccb8a6e4714afca6e8237bacee543b2bf4a",
+                "observed_external_height": "10966670",
+                "ballot_index": "0xf7b98c51a222d1499001eaa98004d7ee6ebebbdc46597d2d03197e8b0e7e16b2",
+                "finalized_zeta_height": "0",
+                "tx_finalization_status": "NotFinalized",
+                "is_cross_chain_call": false,
+                "status": "SUCCESS",
+                "confirmation_mode": "SAFE"
+            },
+            "outbound_params": [
+                {
+                    "receiver": "tb1qhamwhl4w4sdv4j6g5vsfntna2a80kvkunllytl",
+                    "receiver_chainId": "18333",
+                    "coin_type": "Gas",
+                    "amount": "900000",
+                    "tss_nonce": "130",
+                    "gas_limit": "0",
+                    "gas_price": "36",
+                    "gas_priority_fee": "0",
+                    "hash": "ee9f4697a40dc84de2b3410887358e830e66fbd12e44b4a75b2364ae6b1a2ee5",
+                    "ballot_index": "0x7d03a4fca71bee0dcd0d2bbce2add42d9921cb3ace4ee7de7e2b18beb528cc28",
+                    "observed_external_height": "257083",
+                    "gas_used": "0",
+                    "effective_gas_price": "0",
+                    "effective_gas_limit": "0",
+                    "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
+                    "tx_finalization_status": "Executed",
+                    "call_options": {
+                        "gas_limit": "100",
+                        "is_arbitrary_call": true
+                    },
+                    "confirmation_mode": "SAFE"
+                }
+            ],
+            "protocol_contract_version": "V2",
+            "revert_options": {
+                "revert_address": "0x0000000000000000000000000000000000000000",
+                "call_on_revert": false,
+                "abort_address": "0x0000000000000000000000000000000000000000",
+                "revert_message": null,
+                "revert_gas_limit": "0"
+            }
+        },
+        {
+            "creator": "zeta1mte0r3jzkf2rkd7ex4p3xsd3fxqg7q29q0wxl5",
+            "index": "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759",
+            "zeta_fees": "0",
+            "relayed_message": "",
+            "cctx_status": {
+                "status": "OutboundMined",
+                "status_message": "",
+                "error_message": "",
+                "lastUpdate_timestamp": "1750344267",
+                "isAbortRefunded": false,
+                "created_timestamp": "1750344267",
+                "error_message_revert": "",
+                "error_message_abort": ""
+            },
+            "inbound_params": {
+                "sender": "tb1qhamwhl4w4sdv4j6g5vsfntna2a80kvkunllytl",
+                "sender_chain_id": "18333",
+                "tx_origin": "tb1qhamwhl4w4sdv4j6g5vsfntna2a80kvkunllytl",
+                "coin_type": "Gas",
+                "asset": "",
+                "amount": "998368",
+                "observed_hash": "fb9ed1a4f8e3971543f9a598a7b47f70173f5a5f31e43eac2e2fe7911c92254b",
+                "observed_external_height": "257081",
+                "ballot_index": "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759",
+                "finalized_zeta_height": "10966666",
+                "tx_finalization_status": "Executed",
+                "is_cross_chain_call": false,
+                "status": "SUCCESS",
+                "confirmation_mode": "SAFE"
+            },
+            "outbound_params": [
+                {
+                    "receiver": "0x58A8Ba18c585C411B95Ba1e78962a2A3E1c6f52a",
+                    "receiver_chainId": "7001",
+                    "coin_type": "Gas",
+                    "amount": "0",
+                    "tss_nonce": "0",
+                    "gas_limit": "0",
+                    "gas_price": "",
+                    "gas_priority_fee": "",
+                    "hash": "0x4b963c94801f5c81b66c3f0e4ceb38fd18832ea43080060a5de6a7b5863f48d8",
+                    "ballot_index": "",
+                    "observed_external_height": "10966666",
+                    "gas_used": "0",
+                    "effective_gas_price": "0",
+                    "effective_gas_limit": "0",
+                    "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
+                    "tx_finalization_status": "Executed",
+                    "call_options": {
+                        "gas_limit": "0",
+                        "is_arbitrary_call": false
+                    },
+                    "confirmation_mode": "SAFE"
+                }
+            ],
+            "protocol_contract_version": "V2",
+            "revert_options": {
+                "revert_address": "",
+                "call_on_revert": false,
+                "abort_address": "",
+                "revert_message": null,
+                "revert_gas_limit": "0"
+            }
+        }
+    ],
+    "pagination": {
+        "next_key": "////////22c=",
+        "total": "0"
+    }
+}

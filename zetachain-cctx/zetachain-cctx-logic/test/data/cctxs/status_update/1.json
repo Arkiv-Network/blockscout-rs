@@ -1,0 +1,67 @@
+{
+    "CrossChainTx": {
+        "creator": "",
+        "index": "0xbbbe065c9ca9232a1cee369e22f1a30a434d0cae3f63f054456193b010777938",
+        "zeta_fees": "0",
+        "relayed_message": "35393364643230386134623839356534363435663565636235316439396339353031626166386663666630633638313935366231343234666435326333346165616537376262643238663232613461303864633638383231313963353866323765323533",
+        "cctx_status": {
+            "status": "OutboundMined",
+            "status_message": "",
+            "error_message": "",
+            "lastUpdate_timestamp": "1749480200",
+            "isAbortRefunded": false,
+            "created_timestamp": "1749479874",
+            "error_message_revert": "",
+            "error_message_abort": ""
+        },
+        "inbound_params": {
+            "sender": "0x5e55d01aC8677f70ddd437d647b3548456871123",
+            "sender_chain_id": "7001",
+            "tx_origin": "0x5e55d01aC8677f70ddd437d647b3548456871123",
+            "coin_type": "ERC20",
+            "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+            "amount": "1000",
+            "observed_hash": "0x004bb30057cb235d8f26bf32e4d977512d3cad519e23225f9daa7a87fb637f30",
+            "observed_external_height": "10762544",
+            "ballot_index": "0xbbbe065c9ca9232a1cee369e22f1a30a434d0cae3f63f054456193b010777938",
+            "finalized_zeta_height": "0",
+            "tx_finalization_status": "NotFinalized",
+            "is_cross_chain_call": true,
+            "status": "SUCCESS",
+            "confirmation_mode": "SAFE"
+        },
+        "outbound_params": [
+            {
+                "receiver": "0x65e9Bd75449DFE94fF7a627e81084E37f3E5C422",
+                "receiver_chainId": "11155111",
+                "coin_type": "ERC20",
+                "amount": "1000",
+                "tss_nonce": "2770",
+                "gas_limit": "0",
+                "gas_price": "1200022",
+                "gas_priority_fee": "0",
+                "hash": "0xb7d66f3d359584a12ba26934cb64f506441a9884371be1a0321e3cae0b724227",
+                "ballot_index": "0xd3feb046f39d79097acaba5078eb6f4619e1f653c9d84e171350aff9bde7de36",
+                "observed_external_height": "8511672",
+                "gas_used": "172123",
+                "effective_gas_price": "1200022",
+                "effective_gas_limit": "250000",
+                "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
+                "tx_finalization_status": "Executed",
+                "call_options": {
+                    "gas_limit": "250000",
+                    "is_arbitrary_call": false
+                },
+                "confirmation_mode": "SAFE"
+            }
+        ],
+        "protocol_contract_version": "V2",
+        "revert_options": {
+            "revert_address": "0x0000000000000000000000000000000000000000",
+            "call_on_revert": false,
+            "abort_address": "0x0000000000000000000000000000000000000000",
+            "revert_message": null,
+            "revert_gas_limit": "0"
+        }
+    }
+}
