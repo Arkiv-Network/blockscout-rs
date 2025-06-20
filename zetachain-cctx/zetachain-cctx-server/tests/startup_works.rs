@@ -1,20 +1,30 @@
 mod helpers;
+mod data;
 
 use std::sync::Arc;
 
 use blockscout_service_launcher::test_server;
 use pretty_assertions::assert_eq;
+use wiremock::MockServer;
 use zetachain_cctx_logic::client::{Client, RpcSettings};
+use crate::data::{FIRST_PAGE_RESPONSE, SECOND_PAGE_RESPONSE, THIRD_PAGE_RESPONSE};
 
 #[tokio::test]
 #[ignore = "Needs database to run"]
-async fn test_startup_works() {
+async fn test_historical_sync() {
     let db = helpers::init_db(
         "test",
         "startup_works",
     )
     .await;
     let db_url = db.db_url();
+    //setup mock server
+    let mock_server = MockServer::start().await;
+    let mock_client = Client::new(RpcSettings {
+        url: mock_server.uri().to_string(),
+        ..Default::default()
+    });
+    
     let client = Client::new(RpcSettings::default());
     let base = helpers::init_zetachain_cctx_server(
         db_url,

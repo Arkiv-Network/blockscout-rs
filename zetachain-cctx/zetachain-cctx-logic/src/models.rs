@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PagedCCTXResponse {
+    #[serde(rename = "CrossChainTx")]
     pub cross_chain_tx: Vec<CrossChainTx>,
     pub pagination: Pagination,
 }
@@ -30,7 +31,9 @@ pub struct CctxStatus {
     pub status: String,
     pub status_message: String,
     pub error_message: String,
+    #[serde(rename = "lastUpdate_timestamp")]
     pub last_update_timestamp: String,
+    #[serde(rename = "isAbortRefunded")]
     pub is_abort_refunded: bool,
     pub created_timestamp: String,
     pub error_message_revert: String,
@@ -58,6 +61,7 @@ pub struct InboundParams {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OutboundParams {
     pub receiver: String,
+    #[serde(rename = "receiver_chainId")]
     pub receiver_chain_id: String,
     pub coin_type: String,
     pub amount: String,

@@ -2,17 +2,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Ok;
-use tokio::task::JoinHandle;
 use zetachain_cctx_entity::sea_orm_active_enums::{TxFinalizationStatus, WatermarkType};
 use zetachain_cctx_entity::{
-    cctx_status, cross_chain_tx, inbound_params, outbound_params, revert_options,
-    watermark,
+    cctx_status, cross_chain_tx, inbound_params, outbound_params, revert_options, watermark,
 };
 
 use sea_orm::{ColumnTrait, ConnectionTrait, RelationTrait};
 
 use crate::{client::Client, models::CrossChainTx, settings::IndexerSettings};
-use chrono::Utc;
+use chrono::{NaiveDateTime, Utc};
 
 use futures::StreamExt;
 use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
@@ -28,6 +26,7 @@ pub struct Indexer {
 }
 
 enum IndexerJob {
+    RealtimeFetch,                         // New job type for realtime data fetching
     StatusUpdate(String, i32),             //cctx index and id to be updated
     GapFill(watermark::Model), // Watermark (pointer) to the next page of cctxs to be fetched
     HistoricalDataFetch(watermark::Model), // Watermark (pointer) to the next page of cctxs to be fetched
@@ -43,29 +42,45 @@ async fn update_cctx_status(
     let cctx = client.get_cctx(&index).await.unwrap();
     let outbound_params = cctx.outbound_params;
 
+    //begin transaction
+    let tx = db.begin().await?;
     for outbound in outbound_params {
-
         if let Some(record) = outbound_params::Entity::find()
             .filter(outbound_params::Column::CrossChainTxId.eq(Some(id)))
             .filter(outbound_params::Column::Receiver.eq(outbound.receiver))
             .one(db)
             .await
-            .unwrap() {
-                outbound_params::Entity::update(outbound_params::ActiveModel {
-                    id: ActiveValue::Set(record.id),
-                    tx_finalization_status: ActiveValue::Set(TxFinalizationStatus::try_from(outbound.tx_finalization_status)
-                        .map_err(|e| anyhow::anyhow!(e))?),
-                    gas_used: ActiveValue::Set(outbound.gas_used),
-                    effective_gas_price: ActiveValue::Set(outbound.effective_gas_price),
-                    effective_gas_limit: ActiveValue::Set(outbound.effective_gas_limit),
-                    tss_nonce: ActiveValue::Set(outbound.tss_nonce),
-                    ..Default::default()
-                })
-                .filter(outbound_params::Column::Id.eq(record.id))
-                .exec(db)
-                .await?;
-            }
+            .unwrap()
+        {
+            outbound_params::Entity::update(outbound_params::ActiveModel {
+                id: ActiveValue::Set(record.id),
+                tx_finalization_status: ActiveValue::Set(
+                    TxFinalizationStatus::try_from(outbound.tx_finalization_status)
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                ),
+                gas_used: ActiveValue::Set(outbound.gas_used),
+                effective_gas_price: ActiveValue::Set(outbound.effective_gas_price),
+                effective_gas_limit: ActiveValue::Set(outbound.effective_gas_limit),
+                tss_nonce: ActiveValue::Set(outbound.tss_nonce),
+                ..Default::default()
+            })
+            .filter(outbound_params::Column::Id.eq(record.id))
+            .exec(db)
+            .await?;
+        }
     }
+    //unlock cctx
+    cross_chain_tx::Entity::update(cross_chain_tx::ActiveModel {
+        id: ActiveValue::Set(id),
+        lock: ActiveValue::Set(false),
+        ..Default::default()
+    })
+    .filter(cross_chain_tx::Column::Id.eq(id))
+    .exec(&tx)
+    .await?;
+
+    //commit transaction
+    tx.commit().await?;
 
     Ok(())
 }
@@ -74,7 +89,6 @@ async fn gap_fill(
     client: &Client,
     watermark: watermark::Model,
 ) -> anyhow::Result<()> {
-
     let pointer = watermark.pointer;
     let response = client.list_cctx(Some(pointer), true, 100).await.unwrap();
     let cctxs = response.cross_chain_tx;
@@ -111,12 +125,20 @@ async fn gap_fill(
     Ok(())
 }
 
-async fn historical_sync(db: &DatabaseConnection, client: &Client, watermark: watermark::Model) -> anyhow::Result<()> {
+async fn historical_sync(
+    db: &DatabaseConnection,
+    client: &Client,
+    watermark: watermark::Model,
+) -> anyhow::Result<()> {
     let pointer = watermark.pointer;
 
-    let response = client.list_cctx(Some(pointer), true, 100).await.unwrap();
+    let response = client
+        .list_cctx(Some(pointer), true, 100)
+        .instrument(tracing::info_span!("historical_sync"))
+        .await
+        .unwrap();
     let cctxs = response.cross_chain_tx;
-    
+
     //atomically insert cctxs and update watermark
     let tx = db.begin().await?;
 
@@ -136,6 +158,64 @@ async fn historical_sync(db: &DatabaseConnection, client: &Client, watermark: wa
     tx.commit().await?;
     Ok(())
 }
+
+async fn realtime_fetch(db: &DatabaseConnection, client: &Client) -> anyhow::Result<()> {
+    let response = client
+        .list_cctx(None, false, 100)
+        .instrument(tracing::info_span!("realtime_fetch"))
+        .await
+        .unwrap();
+    let txs = response.cross_chain_tx;
+    if txs.is_empty() {
+        tracing::info!("No new cctxs found");
+        return Ok(());
+    }
+    let next_key = response.pagination.next_key;
+
+    //check whether the first of cctx in response is present in the database
+    let first_cctx = txs.first().unwrap();
+    let first_cctx = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq(&first_cctx.index))
+        .one(db)
+        .await
+        .unwrap();
+
+    //if first_cctx is in the database, just wait for the next polling
+    if first_cctx.is_some() {
+        //check whether the last of cctx in response is present in the database
+        let last_cctx = txs.last().unwrap();
+        let last_cctx = cross_chain_tx::Entity::find()
+            .filter(cross_chain_tx::Column::Index.eq(&last_cctx.index))
+            .one(db)
+            .await
+            .unwrap();
+
+        if last_cctx.is_none() {
+            //there might be a gap, so we need to save pagination.next_key as a starting point for the gap-filling process
+            watermark::Entity::insert(watermark::ActiveModel {
+                id: ActiveValue::NotSet,
+                watermark_type: ActiveValue::Set(WatermarkType::Realtime),
+                pointer: ActiveValue::Set(next_key),
+                lock: ActiveValue::Set(false),
+                created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+                updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+            })
+            .exec(db)
+            .instrument(tracing::info_span!("creating new realtime watermark"))
+            .await
+            .unwrap();
+        }
+
+        for tx in txs {
+            if let Err(e) = insert_transaction(db, tx).await {
+                tracing::error!(error = %e, "Failed to insert transaction");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[instrument(skip(db, tx), fields(tx_index = %tx.index))]
 async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> anyhow::Result<()> {
     // Insert main cross_chain_tx record
@@ -170,7 +250,15 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
         status: ActiveValue::Set(tx.cctx_status.status),
         status_message: ActiveValue::Set(Some(tx.cctx_status.status_message)),
         error_message: ActiveValue::Set(Some(tx.cctx_status.error_message)),
-        last_update_timestamp: ActiveValue::Set(tx.cctx_status.last_update_timestamp),
+        last_update_timestamp: ActiveValue::Set(
+            // parse NaiveDateTime from epoch seconds
+            chrono::DateTime::from_timestamp(
+                tx.cctx_status.last_update_timestamp.parse::<i64>().unwrap(),
+                0,
+            )
+            .unwrap()
+            .naive_utc(),
+        ),
         is_abort_refunded: ActiveValue::Set(tx.cctx_status.is_abort_refunded),
         created_timestamp: ActiveValue::Set(tx.cctx_status.created_timestamp),
         error_message_revert: ActiveValue::Set(Some(tx.cctx_status.error_message_revert)),
@@ -179,7 +267,11 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
     cctx_status::Entity::insert(status_model)
         .exec(db)
         .instrument(tracing::info_span!("insert_cctx_status"))
-        .await?;
+        .await
+        .map_err(|e| {
+            println!("insert_cctx_status error: {}", e);
+            e
+        })?;
 
     // Insert inbound_params
     let inbound_model = inbound_params::ActiveModel {
@@ -206,7 +298,11 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
     inbound_params::Entity::insert(inbound_model)
         .exec(db)
         .instrument(tracing::info_span!("insert_inbound_params"))
-        .await?;
+        .await
+        .map_err(|e| {
+            println!("insert_inbound_params error: {}", e);
+            e
+        })?;
 
     // Insert outbound_params
     for outbound in tx.outbound_params {
@@ -241,7 +337,11 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
         outbound_params::Entity::insert(outbound_model)
             .exec(db)
             .instrument(tracing::info_span!("insert_outbound_params"))
-            .await?;
+            .await
+            .map_err(|e| {
+                println!("insert_outbound_params error: {}", e);
+                e
+            })?;
     }
 
     // Insert revert_options
@@ -257,7 +357,11 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
     revert_options::Entity::insert(revert_model)
         .exec(db)
         .instrument(tracing::info_span!("insert_revert_options"))
-        .await?;
+        .await
+        .map_err(|e| {
+            println!("insert_revert_options error: {}", e);
+            e
+        })?;
 
     Ok(())
 }
@@ -279,6 +383,14 @@ impl Indexer {
     }
 
     pub async fn run(&self) {
+        // Realtime fetch stream - highest priority, runs at configured polling interval
+        let realtime_stream = Box::pin(async_stream::stream! {
+            loop {
+                yield IndexerJob::RealtimeFetch;
+                tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
+            }
+        });
+
         let db = self.db.clone();
         // select cctxs where outbound_params.tx_finalization_status is not final
         let status_update_stream = Box::pin(async_stream::stream! {
@@ -297,6 +409,7 @@ impl Indexer {
                     cross_chain_tx::Entity::update(cross_chain_tx::ActiveModel {
                         id: ActiveValue::Set(cctx.id),
                         last_status_update_timestamp: ActiveValue::Set(Utc::now().naive_utc()),
+                        lock: ActiveValue::Set(true),
                         ..Default::default()
                     })
                     .filter(cross_chain_tx::Column::Id.eq(cctx.id))
@@ -358,13 +471,15 @@ impl Indexer {
             }
         });
 
-        //current strategy:
-        //1. gap fill (because if there's a gap, it means that we're lagging behind)
-        //2. status update for new cctxs
-        //3. historical sync
+        // Priority strategy:
+        // 1. Realtime fetch (highest priority - must run at configured frequency)
+        // 2. Gap fill (medium priority - if there's a gap, we're lagging behind)
+        // 3. Status update for new cctxs (medium priority)
+        // 4. Historical sync (lowest priority - can lag without affecting realtime)
         let combined_stream =
             select_with_strategy(status_update_stream, historical_stream, prio_left);
         let combined_stream = select_with_strategy(gap_fill_stream, combined_stream, prio_left);
+        let combined_stream = select_with_strategy(realtime_stream, combined_stream, prio_left);
 
         combined_stream
             .for_each_concurrent(Some(self.settings.concurrency as usize), |job| {
@@ -372,6 +487,12 @@ impl Indexer {
                 let db = self.db.clone();
                 tokio::spawn(async move {
                     match job {
+                        IndexerJob::RealtimeFetch => {
+                            tracing::info!("Realtime fetch");
+                            if let Err(e) = realtime_fetch(&db, &client).await {
+                                tracing::error!(error = %e, "Failed to fetch realtime data");
+                            }
+                        }
                         IndexerJob::StatusUpdate(cctx_index, cctx_id) => {
                             tracing::info!(cctx_index = %cctx_index, "Status update");
                             update_cctx_status(&db, &client, cctx_index, cctx_id)
@@ -384,71 +505,15 @@ impl Indexer {
                         }
                         IndexerJob::HistoricalDataFetch(watermark) => {
                             tracing::info!(watermark = %watermark.pointer, "Historical sync");
-                            historical_sync(&db, &client, watermark).await.unwrap();
+                            historical_sync(&db, &client, watermark)
+                            .instrument(tracing::info_span!("historical_sync"))
+                            .await
+                            .map_err(|e| println!("historical_sync error: {}", e)).unwrap();
                         }
                     }
                 });
                 futures::future::ready(())
             })
             .await;
-    }
-
-    #[instrument(skip(self))]
-    pub fn realtime_fetcher(&self) -> JoinHandle<()> {
-        let db = self.db.clone();
-        let client = self.client.clone();
-        let polling_interval = self.settings.polling_interval;
-        tokio::spawn(async move {
-            loop {
-                let response = client.list_cctx(None, false, 100).await.unwrap();
-                let txs = response.cross_chain_tx;
-
-                let next_key = response.pagination.next_key;
-
-                //check whether the first of cctx in response is present in the database
-                let first_cctx = txs.first().unwrap();
-                let first_cctx = cross_chain_tx::Entity::find()
-                    .filter(cross_chain_tx::Column::Index.eq(&first_cctx.index))
-                    .one(db.as_ref())
-                    .await
-                    .unwrap();
-
-                //if first_cctx is in the database, just wait for the next polling
-                if first_cctx.is_some() {
-                    //check whether the last of cctx in response is present in the database
-                    let last_cctx = txs.last().unwrap();
-                    let last_cctx = cross_chain_tx::Entity::find()
-                        .filter(cross_chain_tx::Column::Index.eq(&last_cctx.index))
-                        .one(db.as_ref())
-                        .await
-                        .unwrap();
-
-                    if last_cctx.is_none() {
-                        //there might be a gap, so we need to save pagination.next_key as a starting point for the gap-filling process
-                        watermark::Entity::insert(watermark::ActiveModel {
-                            id: ActiveValue::NotSet,
-                            watermark_type: ActiveValue::Set(WatermarkType::Realtime),
-                            pointer: ActiveValue::Set(next_key),
-                            lock: ActiveValue::Set(false),
-                            created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
-                            updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
-                        })
-                        .exec(db.as_ref())
-                        .instrument(tracing::info_span!("creating new realtime watermark"))
-                        .await
-                        .unwrap();
-                    }
-
-                    for tx in txs {
-                        let db = db.clone();
-                        if let Err(e) = insert_transaction(db.as_ref(), tx).await {
-                            tracing::error!(error = %e, "Failed to insert transaction");
-                        }
-                    }
-                }
-
-                tokio::time::sleep(Duration::from_millis(polling_interval)).await;
-            }
-        })
     }
 }

@@ -1,5 +1,6 @@
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
+use anyhow::Error;
 use governor::{
     clock::DefaultClock,
     state::{InMemoryState, NotKeyed},
@@ -7,8 +8,8 @@ use governor::{
 };
 use reqwest::{Method, Request, Response, Url};
 use serde::Deserialize;
-use anyhow::Error;
 use tokio::time::timeout;
+use tracing::Instrument;
 
 use crate::models::{CCTXResponse, CrossChainTx, PagedCCTXResponse};
 
@@ -43,7 +44,6 @@ pub struct Client {
 }
 
 impl Client {
-
     async fn make_request(&self, request: Request) -> anyhow::Result<Response> {
         for attempt in 1..=self.settings.num_of_retries {
             let permit = timeout(
@@ -77,7 +77,7 @@ impl Client {
     }
 
     pub async fn get_cctx(&self, index: &str) -> anyhow::Result<CrossChainTx> {
-        let mut url:Url = self.settings.url.parse().unwrap();
+        let mut url: Url = self.settings.url.parse().unwrap();
         url.set_path("/cctx");
         url.set_fragment(Some(&index));
         let request = Request::new(Method::GET, url);
@@ -86,22 +86,39 @@ impl Client {
         Ok(body.cross_chain_tx)
     }
 
-    pub async fn list_cctx(&self, pagination_key: Option<String>, unordered: bool, pagination_limit: u32) -> Result<PagedCCTXResponse, Error> {
-        let mut url:Url = self.settings.url.parse().unwrap();
+    pub async fn list_cctx(
+        &self,
+        pagination_key: Option<String>,
+        unordered: bool,
+        pagination_limit: u32,
+    ) -> Result<PagedCCTXResponse, Error> {
+        let mut url: Url = self.settings.url.parse().unwrap();
         url.set_path("/cctx");
         url.query_pairs_mut()
-        
-        .append_pair("pagination.limit", &pagination_limit.to_string())
-        .append_pair("unordered", &unordered.to_string())
-        .finish();
+            .append_pair("pagination.limit", &pagination_limit.to_string())
+            .append_pair("unordered", &unordered.to_string())
+            .finish();
 
         if let Some(pagination_key) = pagination_key {
-            url.query_pairs_mut().append_pair("pagination.key", &pagination_key);
+            url.query_pairs_mut()
+                .append_pair("pagination.key", &pagination_key);
         }
 
-        let request = Request::new(Method::GET, url);
-        let response = self.make_request(request).await?.error_for_status()?;
-        let body = response.json::<PagedCCTXResponse>().await?;
+        let request = Request::new(Method::GET, url.clone());
+        let response = self
+            .make_request(request)
+            .instrument(tracing::debug_span!("list_cctx", url = url.as_str()))
+            .await?
+            .error_for_status()
+            .map_err(|e| anyhow::anyhow!("HTTP request error: {}", e))?;
+        // let body = response
+        //     .json::<PagedCCTXResponse>()
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!("JSON parsing error: {}", e))?;
+
+        let text = response.text().await?;
+        let body = serde_json::from_str::<PagedCCTXResponse>(&text)
+            .map_err(|e| anyhow::anyhow!("JSON parsing error: {}\n{}", e, text))?;    
         Ok(body)
     }
 }

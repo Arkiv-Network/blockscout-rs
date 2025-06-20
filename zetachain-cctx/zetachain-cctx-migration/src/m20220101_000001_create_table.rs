@@ -95,8 +95,9 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(CctxStatus::ErrorMessage).text().null())
                     .col(
                         ColumnDef::new(CctxStatus::LastUpdateTimestamp)
-                            .string()
-                            .not_null(),
+                            .date_time()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
                     )
                     .col(
                         ColumnDef::new(CctxStatus::IsAbortRefunded)
