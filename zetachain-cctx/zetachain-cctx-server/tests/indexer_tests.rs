@@ -41,7 +41,7 @@ async fn test_historical_sync_with_pagination() {
     let watermark_model = watermark::ActiveModel {
         id: ActiveValue::NotSet,
         watermark_type: ActiveValue::Set(WatermarkType::Historical),
-        pointer: ActiveValue::Set("".to_string()), // Start from beginning
+        pointer: ActiveValue::Set("FIRST_PAGE".to_string()), // Start from beginning
         lock: ActiveValue::Set(false),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
@@ -196,6 +196,7 @@ async fn setup_mock_responses(mock_server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/cctx"))
         .and(query_param("unordered", "true"))
+        .and(query_param("pagination.key", "FIRST_PAGE"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             serde_json::from_str::<serde_json::Value>(FIRST_PAGE_RESPONSE).unwrap()
         ))
