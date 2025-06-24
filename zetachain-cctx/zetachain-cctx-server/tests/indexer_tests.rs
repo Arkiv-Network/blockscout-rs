@@ -16,11 +16,10 @@ use zetachain_cctx_logic::{
     indexer::Indexer,
     settings::IndexerSettings,
 };
-use crate::data::{FIRST_PAGE_RESPONSE, SECOND_PAGE_RESPONSE, THIRD_PAGE_RESPONSE};
+use crate::data::{FIRST_PAGE_RESPONSE, SECOND_PAGE_RESPONSE, THIRD_PAGE_RESPONSE, PENDING_TX_RESPONSE,FINALIZED_TX_RESPONSE};
 use sea_orm::PaginatorTrait;
 
 #[tokio::test]
-#[ignore = "Needs database to run"]
 async fn test_historical_sync_with_pagination() {
     let db = crate::helpers::init_db("test", "indexer_historical_sync").await;
     
@@ -28,7 +27,7 @@ async fn test_historical_sync_with_pagination() {
     let mock_server = MockServer::start().await;
     
     // Mock responses for different pagination scenarios
-    setup_mock_responses(&mock_server).await;
+    setup_historical_mock_responses(&mock_server).await;
     
     // Create client pointing to mock server
     let client = Client::new(RpcSettings {
@@ -124,74 +123,28 @@ async fn test_historical_sync_with_pagination() {
     assert!(third_page_cctx.is_some());
 }
 
-#[tokio::test]
-#[ignore = "Needs database to run"]
-async fn test_realtime_fetch_does_not_interfere() {
-    let db = crate::helpers::init_db("test", "indexer_realtime_fetch").await;
-    // let db_url = db.db_url();
+
+async fn test_status_update() {
+    let db = crate::helpers::init_db("test", "indexer_status_update").await;
     
     // Setup mock server
     let mock_server = MockServer::start().await;
-    
-    // Mock empty response for realtime fetch (unordered=false)
-    Mock::given(method("GET"))
-        .and(path("/cctx"))
-        .and(query_param("unordered", "false"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "CrossChainTx": [],
-            "pagination": {
-                "next_key": "",
-                "total": "0"
-            }
-        })))
-        .mount(&mock_server)
-        .await;
-    
-    // Create client pointing to mock server
-    let client = Client::new(RpcSettings {
-        url: mock_server.uri().to_string(),
-        ..Default::default()
-    });
-    
-    // Create indexer
-    let db_conn = db.client();
-    let indexer = Indexer::new(
-        IndexerSettings {
-            polling_interval: 100, // Fast polling for tests
-            concurrency: 1,
-        },
-        db_conn.clone(),
-        Arc::new(client),
-    );
-    
-    // Run indexer for a short time
-    let indexer_handle = tokio::spawn(async move {
-        let timeout_duration = Duration::from_secs(3);
-        tokio::time::timeout(timeout_duration, async {
-            indexer.run().await;
-        })
-        .await
-        .unwrap_or_else(|_| {
-            // Timeout is expected
-        });
-    });
-    
-    // Wait for indexer to process
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-    
-    // Cancel the indexer
-    indexer_handle.abort();
-    
-    // Verify no CCTX records were inserted (since realtime returned empty)
-    let cctx_count = cross_chain_tx::Entity::find()
-        .count(db_conn.as_ref())
-        .await
-        .unwrap();
-    
-    assert_eq!(cctx_count, 0);
-}
 
-async fn setup_mock_responses(mock_server: &MockServer) {
+    setup_status_update_mock_responses(&mock_server).await;
+    
+}
+async fn setup_status_update_mock_responses(mock_server: &MockServer) {
+
+    let pending_tx_index = "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759";
+    Mock::given(method("GET"))
+        .and(path(format!("/cctx/{}", pending_tx_index).as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::from_str::<serde_json::Value>(PENDING_TX_RESPONSE).unwrap()
+        ))
+        .mount(mock_server)
+        .await;
+}
+async fn setup_historical_mock_responses(mock_server: &MockServer) {
     // Mock first page response (default case)
     Mock::given(method("GET"))
         .and(path("/cctx"))

@@ -549,7 +549,7 @@ pub const THIRD_PAGE_RESPONSE: &str = r#"
             "zeta_fees": "0",
             "relayed_message": "",
             "cctx_status": {
-                "status": "OutboundMined",
+                "status": "OutboundPending",
                 "status_message": "",
                 "error_message": "",
                 "lastUpdate_timestamp": "1750344267",
@@ -591,7 +591,7 @@ pub const THIRD_PAGE_RESPONSE: &str = r#"
                     "effective_gas_price": "0",
                     "effective_gas_limit": "0",
                     "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
-                    "tx_finalization_status": "Executed",
+                    "tx_finalization_status": "Pending",
                     "call_options": {
                         "gas_limit": "0",
                         "is_arbitrary_call": false
@@ -616,7 +616,75 @@ pub const THIRD_PAGE_RESPONSE: &str = r#"
 }
 "#;
 
-pub const STATUS_UPDATE_RESPONSE: &str = r#"
+pub const PENDING_TX_RESPONSE: &str = r#"
+{
+            "creator": "zeta1mte0r3jzkf2rkd7ex4p3xsd3fxqg7q29q0wxl5",
+            "index": "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759",
+            "zeta_fees": "0",
+            "relayed_message": "",
+            "cctx_status": {
+                "status": "OutboundPending",
+                "status_message": "",
+                "error_message": "",
+                "lastUpdate_timestamp": "1750344267",
+                "isAbortRefunded": false,
+                "created_timestamp": "1750344267",
+                "error_message_revert": "",
+                "error_message_abort": ""
+            },
+            "inbound_params": {
+                "sender": "tb1qhamwhl4w4sdv4j6g5vsfntna2a80kvkunllytl",
+                "sender_chain_id": "18333",
+                "tx_origin": "tb1qhamwhl4w4sdv4j6g5vsfntna2a80kvkunllytl",
+                "coin_type": "Gas",
+                "asset": "",
+                "amount": "998368",
+                "observed_hash": "fb9ed1a4f8e3971543f9a598a7b47f70173f5a5f31e43eac2e2fe7911c92254b",
+                "observed_external_height": "257081",
+                "ballot_index": "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759",
+                "finalized_zeta_height": "10966666",
+                "tx_finalization_status": "Executed",
+                "is_cross_chain_call": false,
+                "status": "SUCCESS",
+                "confirmation_mode": "SAFE"
+            },
+            "outbound_params": [
+                {
+                    "receiver": "0x58A8Ba18c585C411B95Ba1e78962a2A3E1c6f52a",
+                    "receiver_chainId": "7001",
+                    "coin_type": "Gas",
+                    "amount": "0",
+                    "tss_nonce": "0",
+                    "gas_limit": "0",
+                    "gas_price": "",
+                    "gas_priority_fee": "",
+                    "hash": "0x4b963c94801f5c81b66c3f0e4ceb38fd18832ea43080060a5de6a7b5863f48d8",
+                    "ballot_index": "",
+                    "observed_external_height": "10966666",
+                    "gas_used": "0",
+                    "effective_gas_price": "0",
+                    "effective_gas_limit": "0",
+                    "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
+                    "tx_finalization_status": "Pending",
+                    "call_options": {
+                        "gas_limit": "0",
+                        "is_arbitrary_call": false
+                    },
+                    "confirmation_mode": "SAFE"
+                }
+            ],
+            "protocol_contract_version": "V2",
+            "revert_options": {
+                "revert_address": "",
+                "call_on_revert": false,
+                "abort_address": "",
+                "revert_message": null,
+                "revert_gas_limit": "0"
+            }
+        }
+"#;
+
+pub const FINALIZED_TX_RESPONSE: &str = r#"
 {
             "creator": "zeta1mte0r3jzkf2rkd7ex4p3xsd3fxqg7q29q0wxl5",
             "index": "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759",

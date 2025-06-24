@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Ok;
+use crate::models::{CrossChainTx, OutboundParams, InboundParams, RevertOptions};
+use zetachain_cctx_entity::prelude::CrossChainTx as CrossChainTxModel;
 use zetachain_cctx_entity::sea_orm_active_enums::{TxFinalizationStatus, WatermarkType};
 use zetachain_cctx_entity::{
     cctx_status, cross_chain_tx, inbound_params, outbound_params, revert_options, watermark,
@@ -9,8 +11,8 @@ use zetachain_cctx_entity::{
 
 use sea_orm::{ColumnTrait, ConnectionTrait, RelationTrait};
 
-use crate::{client::Client, models::CrossChainTx, settings::IndexerSettings};
-use chrono::{NaiveDateTime, Utc};
+use crate::{client::Client, settings::IndexerSettings};
+use chrono::{DateTime, Utc};
 
 use futures::StreamExt;
 use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
@@ -27,7 +29,7 @@ pub struct Indexer {
 
 enum IndexerJob {
     RealtimeFetch,                         // New job type for realtime data fetching
-    StatusUpdate(String, i32),             //cctx index and id to be updated
+    StatusUpdate(cross_chain_tx::Model),             //cctx index and id to be updated
     GapFill(watermark::Model), // Watermark (pointer) to the next page of cctxs to be fetched
     HistoricalDataFetch(watermark::Model), // Watermark (pointer) to the next page of cctxs to be fetched
 }
@@ -35,19 +37,19 @@ enum IndexerJob {
 async fn update_cctx_status(
     db: &DatabaseConnection,
     client: &Client,
-    index: String,
-    id: i32,
+    existing_cctx: cross_chain_tx::Model,
 ) -> anyhow::Result<()> {
     //get the most recent cctx data from the client and update corresponding child record of cctx (outbound params)
-    let cctx = client.get_cctx(&index).await.unwrap();
-    let outbound_params = cctx.outbound_params;
+    let fetched_cctx = client.get_cctx(&existing_cctx.index).await.unwrap();
+
+    
 
     //begin transaction
     let tx = db.begin().await?;
-    for outbound in outbound_params {
+    for outbound_params in fetched_cctx.outbound_params {
         if let Some(record) = outbound_params::Entity::find()
-            .filter(outbound_params::Column::CrossChainTxId.eq(Some(id)))
-            .filter(outbound_params::Column::Receiver.eq(outbound.receiver))
+            .filter(outbound_params::Column::CrossChainTxId.eq(Some(existing_cctx.id)))
+            .filter(outbound_params::Column::Receiver.eq(outbound_params.receiver))
             .one(db)
             .await
             .unwrap()
@@ -55,13 +57,13 @@ async fn update_cctx_status(
             outbound_params::Entity::update(outbound_params::ActiveModel {
                 id: ActiveValue::Set(record.id),
                 tx_finalization_status: ActiveValue::Set(
-                    TxFinalizationStatus::try_from(outbound.tx_finalization_status)
+                    TxFinalizationStatus::try_from(outbound_params.tx_finalization_status)
                         .map_err(|e| anyhow::anyhow!(e))?,
                 ),
-                gas_used: ActiveValue::Set(outbound.gas_used),
-                effective_gas_price: ActiveValue::Set(outbound.effective_gas_price),
-                effective_gas_limit: ActiveValue::Set(outbound.effective_gas_limit),
-                tss_nonce: ActiveValue::Set(outbound.tss_nonce),
+                gas_used: ActiveValue::Set(outbound_params.gas_used),
+                effective_gas_price: ActiveValue::Set(outbound_params.effective_gas_price),
+                effective_gas_limit: ActiveValue::Set(outbound_params.effective_gas_limit),
+                tss_nonce: ActiveValue::Set(outbound_params.tss_nonce),
                 ..Default::default()
             })
             .filter(outbound_params::Column::Id.eq(record.id))
@@ -71,11 +73,11 @@ async fn update_cctx_status(
     }
     //unlock cctx
     cross_chain_tx::Entity::update(cross_chain_tx::ActiveModel {
-        id: ActiveValue::Set(id),
+        id: ActiveValue::Set(existing_cctx.id),
         lock: ActiveValue::Set(false),
         ..Default::default()
     })
-    .filter(cross_chain_tx::Column::Id.eq(id))
+    .filter(cross_chain_tx::Column::Id.eq(existing_cctx.id))
     .exec(&tx)
     .await?;
 
@@ -143,8 +145,19 @@ async fn historical_sync(
     let tx = db.begin().await?;
 
     for cctx in cctxs {
+        if cross_chain_tx::Entity::find()
+            .filter(cross_chain_tx::Column::Index.eq(&cctx.index))
+            .one(db)
+            .await?
+            .is_some()
+        {
+            println!("transaction already exists: {}", cctx.index);
+            continue;
+        }
         insert_transaction(&tx, cctx).await?;
     }
+
+    println!("setting response.pagination.next_key: {}", response.pagination.next_key);
     watermark::Entity::update(watermark::ActiveModel {
         id: ActiveValue::Set(watermark.id),
         pointer: ActiveValue::Set(response.pagination.next_key),
@@ -207,6 +220,16 @@ async fn realtime_fetch(db: &DatabaseConnection, client: &Client) -> anyhow::Res
         }
 
         for tx in txs {
+            //check if the transaction already exists
+            if cross_chain_tx::Entity::find()
+            .filter(cross_chain_tx::Column::Index.eq(&tx.index))
+            .one(db)
+            .await?
+            .is_some()
+            {
+                println!("transaction already exists: {}", tx.index);
+                continue;
+            }
             if let Err(e) = insert_transaction(db, tx).await {
                 tracing::error!(error = %e, "Failed to insert transaction");
             }
@@ -415,7 +438,7 @@ impl Indexer {
                     .filter(cross_chain_tx::Column::Id.eq(cctx.id))
                     .exec(db.as_ref())
                     .await.unwrap();
-                    yield IndexerJob::StatusUpdate(cctx.index.to_string(), cctx.id);
+                    yield IndexerJob::StatusUpdate(cctx);
                 }
 
                 tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
@@ -493,9 +516,9 @@ impl Indexer {
                                 tracing::error!(error = %e, "Failed to fetch realtime data");
                             }
                         }
-                        IndexerJob::StatusUpdate(cctx_index, cctx_id) => {
-                            tracing::info!(cctx_index = %cctx_index, "Status update");
-                            update_cctx_status(&db, &client, cctx_index, cctx_id)
+                        IndexerJob::StatusUpdate(existing_cctx) => {
+                            // tracing::info!(cctx_index = %existing_cctx.index, "Status update");
+                            update_cctx_status(&db, &client, existing_cctx)
                                 .await
                                 .unwrap();
                         }
@@ -505,6 +528,7 @@ impl Indexer {
                         }
                         IndexerJob::HistoricalDataFetch(watermark) => {
                             tracing::info!(watermark = %watermark.pointer, "Historical sync");
+                            println!("watermark: {}", watermark.pointer);
                             historical_sync(&db, &client, watermark)
                             .instrument(tracing::info_span!("historical_sync"))
                             .await
