@@ -591,7 +591,7 @@ pub const THIRD_PAGE_RESPONSE: &str = r#"
                     "effective_gas_price": "0",
                     "effective_gas_limit": "0",
                     "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
-                    "tx_finalization_status": "Pending",
+                    "tx_finalization_status": "NotFinalized",
                     "call_options": {
                         "gas_limit": "0",
                         "is_arbitrary_call": false
@@ -665,7 +665,7 @@ pub const PENDING_TX_RESPONSE: &str = r#"
                     "effective_gas_price": "0",
                     "effective_gas_limit": "0",
                     "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
-                    "tx_finalization_status": "Pending",
+                    "tx_finalization_status": "NotFinalized",
                     "call_options": {
                         "gas_limit": "0",
                         "is_arbitrary_call": false

@@ -1,3 +1,7 @@
+[tracing]
+enabled = true
+format = "default"
+
 [database.connect]
 url = "postgres://postgres:postgres@database:5433/blockscout"
 
@@ -12,10 +16,11 @@ create_database = true
 run_migrations = true
 
 [indexer]
-polling_interval = 2
-retry_interval = 120
-pagination_limit = 100
+polling_interval = 3000
+concurrency=1
 
 [rpc]
-url = "https://zetachain-athens.g.allthatnode.com/archive/rest/a0edcf7bca3748b0a115df6163411457/zeta-chain"
-request_per_second = 100
+url = "https://zetachain-athens.g.allthatnode.com/archive/rest/a0edcf7bca3748b0a115df6163411457/zeta-chain/"
+request_per_second = 1
+num_of_retries=3
+retry_delay_ms=1000

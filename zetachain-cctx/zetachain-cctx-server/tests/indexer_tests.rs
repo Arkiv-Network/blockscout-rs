@@ -137,7 +137,7 @@ async fn setup_status_update_mock_responses(mock_server: &MockServer) {
 
     let pending_tx_index = "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759";
     Mock::given(method("GET"))
-        .and(path(format!("/cctx/{}", pending_tx_index).as_str()))
+        .and(path(format!("/crosschain/cctx/{}", pending_tx_index).as_str()))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             serde_json::from_str::<serde_json::Value>(PENDING_TX_RESPONSE).unwrap()
         ))
@@ -147,7 +147,7 @@ async fn setup_status_update_mock_responses(mock_server: &MockServer) {
 async fn setup_historical_mock_responses(mock_server: &MockServer) {
     // Mock first page response (default case)
     Mock::given(method("GET"))
-        .and(path("/cctx"))
+        .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "true"))
         .and(query_param("pagination.key", "FIRST_PAGE"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
@@ -158,7 +158,7 @@ async fn setup_historical_mock_responses(mock_server: &MockServer) {
     
     // Mock second page response when pagination.key == "SECOND_PAGE"
     Mock::given(method("GET"))
-        .and(path("/cctx"))
+        .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "true"))
         .and(query_param("pagination.key", "SECOND_PAGE"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
@@ -169,7 +169,7 @@ async fn setup_historical_mock_responses(mock_server: &MockServer) {
     
     // Mock third page response when pagination.key == "THIRD_PAGE"
     Mock::given(method("GET"))
-        .and(path("/cctx"))
+        .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "true"))
         .and(query_param("pagination.key", "THIRD_PAGE"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
@@ -188,7 +188,7 @@ async fn setup_historical_mock_responses(mock_server: &MockServer) {
 
     // Mock realtime fetch response (unordered=false)
     Mock::given(method("GET"))
-        .and(path("/cctx"))
+        .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "false"))
         .respond_with(ResponseTemplate::new(200).set_body_json(empty_response))
         .mount(mock_server)

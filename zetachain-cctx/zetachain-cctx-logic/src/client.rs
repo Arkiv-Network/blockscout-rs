@@ -78,7 +78,7 @@ impl Client {
 
     pub async fn get_cctx(&self, index: &str) -> anyhow::Result<CrossChainTx> {
         let mut url: Url = self.settings.url.parse().unwrap();
-        url.set_path("/cctx");
+        url.set_path("/crosschain/cctx");
         url.set_fragment(Some(&index));
         let request = Request::new(Method::GET, url);
         let response = self.make_request(request).await?.error_for_status()?;
@@ -93,7 +93,9 @@ impl Client {
         pagination_limit: u32,
     ) -> Result<PagedCCTXResponse, Error> {
         let mut url: Url = self.settings.url.parse().unwrap();
-        url.set_path("/cctx");
+        let path = url.path();
+        //add "/cctx" to the path
+        url.set_path(&format!("{}crosschain/cctx", path));
         url.query_pairs_mut()
             .append_pair("pagination.limit", &pagination_limit.to_string())
             .append_pair("unordered", &unordered.to_string())
@@ -107,7 +109,7 @@ impl Client {
         let request = Request::new(Method::GET, url.clone());
         let response = self
             .make_request(request)
-            .instrument(tracing::debug_span!("list_cctx", url = url.as_str()))
+            .instrument(tracing::debug_span!("executing list_cctx", url = url.as_str()))
             .await?
             .error_for_status()
             .map_err(|e| anyhow::anyhow!("HTTP request error: {}", e))?;
