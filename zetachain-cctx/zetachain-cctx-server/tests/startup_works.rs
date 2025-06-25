@@ -18,12 +18,7 @@ async fn test_historical_sync() {
     )
     .await;
     let db_url = db.db_url();
-    //setup mock server
-    let mock_server = MockServer::start().await;
-    let mock_client = Client::new(RpcSettings {
-        url: mock_server.uri().to_string(),
-        ..Default::default()
-    });
+
     
     let client = Client::new(RpcSettings::default());
     let base = helpers::init_zetachain_cctx_server(

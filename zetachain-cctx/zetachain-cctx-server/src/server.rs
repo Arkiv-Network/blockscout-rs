@@ -46,7 +46,9 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
     let cctx = Arc::new(CctxService::new(db.clone()));
     let indexer = Indexer::new(settings.indexer, db, client);
 
-    indexer.run().await;
+    tokio::spawn(async move {
+        indexer.run().await;
+    });
 
     let router = Router {
         cctx,
