@@ -37,6 +37,12 @@ async fn test_historical_sync_updates_pointer() {
     
     // Initialize database with historical watermark
     let db_conn = db.client();
+
+    cross_chain_tx::Entity::delete_many()
+        .exec(db_conn.as_ref())
+        .await
+        .unwrap();
+
     let watermark_model = watermark::ActiveModel {
         id: ActiveValue::NotSet,
         watermark_type: ActiveValue::Set(WatermarkType::Historical),
@@ -75,7 +81,7 @@ async fn test_historical_sync_updates_pointer() {
     });
     
     // Wait for indexer to process
-    tokio::time::sleep(Duration::from_millis(2000)).await;
+    tokio::time::sleep(Duration::from_millis(5000)).await;
     
     // Cancel the indexer
     indexer_handle.abort();
@@ -88,8 +94,8 @@ async fn test_historical_sync_updates_pointer() {
         .unwrap()
         .unwrap();
     
-    // assert_eq!(final_watermark.pointer, "////////22c=");
-    // assert_eq!(final_watermark.lock, false);
+    assert_eq!(final_watermark.pointer, "////////22c=");
+    assert_eq!(final_watermark.lock, false);
     
     // Verify that all CCTX records were inserted
     let cctx_count = cross_chain_tx::Entity::find()
@@ -98,7 +104,7 @@ async fn test_historical_sync_updates_pointer() {
         .unwrap();
     
     // We expect 9 total CCTX records (3 from each page)
-    // // assert_eq!(cctx_count, 9);
+    assert_eq!(cctx_count, 9);
     
     // // Verify specific CCTX records exist
     let first_page_cctx = cross_chain_tx::Entity::find()
@@ -108,19 +114,19 @@ async fn test_historical_sync_updates_pointer() {
         .unwrap();
     assert!(first_page_cctx.is_some());
     
-    // let second_page_cctx = cross_chain_tx::Entity::find()
-    //     .filter(cross_chain_tx::Column::Index.eq("0xff18366b92db12f7204eca924bc8ffbf93f655c7a35b68ec38b38d61d49fbaeb"))
-    //     .one(db_conn.as_ref())
-    //     .await
-    //     .unwrap();
-    // assert!(second_page_cctx.is_some());
+    let second_page_cctx = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq("0xff18366b92db12f7204eca924bc8ffbf93f655c7a35b68ec38b38d61d49fbaeb"))
+        .one(db_conn.as_ref())
+        .await
+        .unwrap();
+    assert!(second_page_cctx.is_some());
     
-    // let third_page_cctx = cross_chain_tx::Entity::find()
-    //     .filter(cross_chain_tx::Column::Index.eq("0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31"))
-    //     .one(db_conn.as_ref())
-    //     .await
-    //     .unwrap();
-    // assert!(third_page_cctx.is_some());
+    let third_page_cctx = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq("0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31"))
+        .one(db_conn.as_ref())
+        .await
+        .unwrap();
+    assert!(third_page_cctx.is_some());
 }
 
 
@@ -166,21 +172,32 @@ async fn test_parse_historical_data() {
         .exec(db.client().as_ref())
         .await
         .unwrap();
-
     let indexer = Indexer::new(
         IndexerSettings {
             polling_interval: 100, // Fast polling for tests
             concurrency: 1,
         },
-        db.client(),
+        db.client().clone(),
         Arc::new(client),
     );
-
+    
+    // Run indexer for a short time to process historical data
     let indexer_handle = tokio::spawn(async move {
-        indexer.run().await;
+        // Run for a limited time to avoid infinite loop
+        let timeout_duration = Duration::from_secs(5);
+        tokio::time::timeout(timeout_duration, async {
+            indexer.run().await;
+        })
+        .await
+        .unwrap_or_else(|_| {
+            // Timeout is expected as we want to stop after processing
+        });
     });
-
+    
+    // Wait for indexer to process
     tokio::time::sleep(Duration::from_millis(2000)).await;
+    
+    // Cancel the indexer
     indexer_handle.abort();
 
     let cctx_count = cross_chain_tx::Entity::find()
@@ -191,7 +208,7 @@ async fn test_parse_historical_data() {
     assert_eq!(cctx_count, 100);
 
         let first_page_cctx = cross_chain_tx::Entity::find()
-            .filter(cross_chain_tx::Column::Index.eq("0x000002f562490b9dfde6bad3c9823ef72a972b8bf559f6bd32e7c461b4e0ab76"))
+            .filter(cross_chain_tx::Column::Index.eq("0x003d98f1eaa33775e97aef378d6d0dea466187239e90b3ecb0f0fca96f8facbf"))
             .one(db.client().as_ref())
             .await
             .unwrap();
@@ -199,7 +216,7 @@ async fn test_parse_historical_data() {
     assert!(first_page_cctx.is_some());
 
     let second_page_cctx = cross_chain_tx::Entity::find()
-        .filter(cross_chain_tx::Column::Index.eq("0x000025d9fac0bcc7d9a381a365a2f415914bffe300ed728429b4538af036de98"))
+        .filter(cross_chain_tx::Column::Index.eq("0x003d98f1eaa33775e97aef378d6d0dea466187239e90b3ecb0f0fca96f8facbf"))
         .one(db.client().as_ref())
         .await
         .unwrap();

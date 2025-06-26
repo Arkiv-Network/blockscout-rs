@@ -551,7 +551,7 @@ pub const THIRD_PAGE_RESPONSE: &str = r#"
             "zeta_fees": "0",
             "relayed_message": "",
             "cctx_status": {
-                "status": "OutboundPending",
+                "status": "OutboundMined",
                 "status_message": "",
                 "error_message": "",
                 "lastUpdate_timestamp": "1750344267",
@@ -625,7 +625,7 @@ pub const PENDING_TX_RESPONSE: &str = r#"
             "zeta_fees": "0",
             "relayed_message": "",
             "cctx_status": {
-                "status": "OutboundPending",
+                "status": "OutboundMined",
                 "status_message": "",
                 "error_message": "",
                 "lastUpdate_timestamp": "1750344267",
@@ -755,7 +755,7 @@ pub const FINALIZED_TX_RESPONSE: &str = r#"
 "#;
 
 pub fn historic_response_from_file() -> String {
-    let file_path = "tests/data/response.json";
+    let file_path = "tests/data/bad_response.json";
     let file_content = fs::read_to_string(file_path).expect("Failed to read file");
     file_content
 }

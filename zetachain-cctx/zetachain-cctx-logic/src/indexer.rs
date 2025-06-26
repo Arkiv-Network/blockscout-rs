@@ -5,7 +5,7 @@ use anyhow::Ok;
 
 use tokio::task::JoinHandle;
 use uuid::Uuid;
-use crate::models::{CrossChainTx, OutboundParams, InboundParams, RevertOptions};
+use crate::models::{CrossChainTx, InboundParams, OutboundParams, PagedCCTXResponse, RevertOptions};
 use zetachain_cctx_entity::prelude::CrossChainTx as CrossChainTxModel;
 use zetachain_cctx_entity::sea_orm_active_enums::{CctxStatusStatus, TxFinalizationStatus, WatermarkType};
 use zetachain_cctx_entity::{
@@ -128,6 +128,7 @@ async fn gap_fill(
 
 pub async fn unlock_watermark(db: &DatabaseConnection, watermark: watermark::Model) -> anyhow::Result<()> {
     let res = watermark::Entity::update(watermark::ActiveModel {
+        id: ActiveValue::Unchanged(watermark.id),
         lock: ActiveValue::Set(false),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         ..Default::default()
@@ -143,7 +144,8 @@ pub async fn unlock_watermark(db: &DatabaseConnection, watermark: watermark::Mod
 
 pub async fn lock_watermark(db: &DatabaseConnection, watermark: watermark::Model) -> anyhow::Result<()> {
     watermark::Entity::update(watermark::ActiveModel {
-        lock:ActiveValue::Set(true),
+        id: ActiveValue::Unchanged(watermark.id),
+        lock: ActiveValue::Set(true),
         ..Default::default()
     }).filter(watermark::Column::Id.eq(watermark.id))
     .exec(db)
@@ -152,6 +154,7 @@ pub async fn lock_watermark(db: &DatabaseConnection, watermark: watermark::Model
 }
 async fn unlock_cctx(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
     cross_chain_tx::Entity::update(cross_chain_tx::ActiveModel {
+        id: ActiveValue::Unchanged(id),
         lock: ActiveValue::Set(false),
         ..Default::default()
     })
@@ -164,36 +167,43 @@ async fn historical_sync(
     db: &DatabaseConnection,
     client: &Client,
     watermark: watermark::Model,
+    job_id: Uuid,
 ) -> anyhow::Result<()> {
     let pointer = watermark.pointer.clone();
     
 
     let response = client
         .list_cctx(Some(pointer), true, 100)
-        .instrument(tracing::info_span!("historical_sync"))
+        .instrument( tracing::info_span!("historical_sync", span_id = %job_id))
         .await?;
-    let cctxs = response.cross_chain_tx;
+
+    match response {
+        PagedCCTXResponse {cross_chain_tx, pagination} => {
+            let cctxs = cross_chain_tx;
+            println!("job_id: {} got pagination: {:?}", job_id, pagination);
+            
 
     //atomically insert cctxs and update watermark
-    // let tx = db.begin().await?;
-
-    if let Err(e) = batch_insert_transactions(db, &cctxs).await {
+    let tx = db.begin().await?;
+    println!("job_id: {} created tx", job_id);
+    if let Err(e) = batch_insert_transactions(&tx, &cctxs).await {
+        println!("job_id: {} failed to batch insert transactions, error: {:?}", job_id, e);
         tracing::error!(error = %e, "Failed to batch insert transactions");
         return Err(e);
     }
 
 
-    println!("setting response.pagination.next_key: {} for watermark: {}", response.pagination.next_key, watermark.id);
+    println!("setting response.pagination.next_key: {} for watermark: {}", pagination.next_key, watermark.id);
 
     let watermark_id = watermark.id; // Store the ID before consuming watermark
     let mut watermark_active:watermark::ActiveModel = watermark.into();
     
     // // Ensure the primary key is properly set for the update
     watermark_active.id = ActiveValue::Unchanged(watermark_id);
-    watermark_active.pointer = ActiveValue::Set(response.pagination.next_key);
+    watermark_active.pointer = ActiveValue::Set(pagination.next_key);
     watermark_active.lock = ActiveValue::Set(false);
     watermark_active.updated_at = ActiveValue::Set(Utc::now().naive_utc());
-    watermark_active.update(db).await?;
+    watermark_active.update(&tx).await?;
 
     // watermark::Entity::update(watermark::ActiveModel {
     //     lock:ActiveValue::Set(false),
@@ -201,7 +211,10 @@ async fn historical_sync(
     // }).filter(watermark::Column::Id.eq(watermark_id))
     // .exec(db)
     // .await?;
-    // db.commit().await?;
+    tx.commit().await?;
+        }
+    }
+    
     
     Ok(())
 }
@@ -846,7 +859,7 @@ impl Indexer {
                             unlock_watermark(&db, watermark).await.unwrap();
                         }
                         IndexerJob::HistoricalDataFetch(watermark, span_id) => { 
-                            if let Err(e) =historical_sync(&db, &client, watermark.clone())
+                            if let Err(e) =historical_sync(&db, &client, watermark.clone(), span_id)
                             .instrument(tracing::info_span!("processing historical data fetch job", span_id = %span_id))
                             .await {
                                 tracing::error!(error = %e, span_id = %span_id, "Failed to fetch historical data");
