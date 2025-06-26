@@ -25,8 +25,8 @@ pub struct Model {
     pub effective_gas_limit: String,
     pub tss_pubkey: String,
     pub tx_finalization_status: TxFinalizationStatus,
-    pub call_options_gas_limit: String,
-    pub call_options_is_arbitrary_call: bool,
+    pub call_options_gas_limit: Option<String>,
+    pub call_options_is_arbitrary_call: Option<bool>,
     pub confirmation_mode: String,
 }
 

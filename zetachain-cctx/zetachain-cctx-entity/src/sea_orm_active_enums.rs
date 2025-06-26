@@ -3,6 +3,23 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "cctx_status_status")]
+pub enum CctxStatusStatus {
+    #[sea_orm(string_value = "PendingInbound")]
+    PendingInbound,
+    #[sea_orm(string_value = "PendingOutbound")]
+    PendingOutbound,
+    #[sea_orm(string_value = "PendingRevert")]
+    PendingRevert,
+    #[sea_orm(string_value = "Aborted")]
+    Aborted,
+    #[sea_orm(string_value = "Reverted")]
+    Reverted,
+    #[sea_orm(string_value = "OutboundMined")]
+    OutboundMined,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(
     rs_type = "String",
     db_type = "Enum",

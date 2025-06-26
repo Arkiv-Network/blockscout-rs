@@ -16,8 +16,8 @@ create_database = true
 run_migrations = true
 
 [indexer]
-polling_interval = 3000
-concurrency=1
+polling_interval = 1000
+concurrency=10
 
 [rpc]
 url = "https://zetachain-athens.g.allthatnode.com/archive/rest/a0edcf7bca3748b0a115df6163411457/zeta-chain/"

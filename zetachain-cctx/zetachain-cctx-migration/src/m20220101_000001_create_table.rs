@@ -16,6 +16,9 @@ impl MigrationTrait for Migration {
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'watermark_type') THEN
                     CREATE TYPE watermark_type AS ENUM ('realtime', 'historical');
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'cctx_status_status') THEN
+                    CREATE TYPE cctx_status_status AS ENUM ('PendingInbound', 'PendingOutbound', 'PendingRevert', 'Aborted', 'Reverted', 'OutboundMined');
+                END IF;
             END $$;"#,
         )
         .await?;
@@ -38,9 +41,24 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(Watermark::Pointer).string().not_null())
-                    .col(ColumnDef::new(Watermark::Lock).boolean().not_null().default(false))
-                    .col(ColumnDef::new(Watermark::CreatedAt).date_time().default(Expr::current_timestamp()).not_null())
-                    .col(ColumnDef::new(Watermark::UpdatedAt).date_time().default(Expr::current_timestamp()).not_null())
+                    .col(
+                        ColumnDef::new(Watermark::Lock)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
+                    .col(
+                        ColumnDef::new(Watermark::CreatedAt)
+                            .date_time()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Watermark::UpdatedAt)
+                            .date_time()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -60,14 +78,34 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(CrossChainTx::Creator).string().not_null())
                     .col(ColumnDef::new(CrossChainTx::Index).string().not_null())
                     .col(ColumnDef::new(CrossChainTx::ZetaFees).string().not_null())
-                    .col(ColumnDef::new(CrossChainTx::Lock).boolean().not_null().default(false))
+                    .col(
+                        ColumnDef::new(CrossChainTx::Lock)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
                     .col(ColumnDef::new(CrossChainTx::RelayedMessage).text().null())
-                    .col(ColumnDef::new(CrossChainTx::LastStatusUpdateTimestamp).date_time().default(Expr::current_timestamp()).not_null())
+                    .col(
+                        ColumnDef::new(CrossChainTx::LastStatusUpdateTimestamp)
+                            .date_time()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(CrossChainTx::ProtocolContractVersion)
                             .string()
                             .not_null(),
                     )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_cross_chain_tx_index_unique")
+                    .table(CrossChainTx::Table)
+                    .col(CrossChainTx::Index)
+                    .unique()
                     .to_owned(),
             )
             .await?;
@@ -90,7 +128,21 @@ impl MigrationTrait for Migration {
                             .integer()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(CctxStatus::Status).string().not_null())
+                    .col(
+                        ColumnDef::new(CctxStatus::Status)
+                            .enumeration(
+                                "cctx_status_status",
+                                [
+                                    "PendingInbound",
+                                    "PendingOutbound",
+                                    "PendingRevert",
+                                    "Aborted",
+                                    "Reverted",
+                                    "OutboundMined",
+                                ],
+                            )
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(CctxStatus::StatusMessage).string().null())
                     .col(ColumnDef::new(CctxStatus::ErrorMessage).text().null())
                     .col(
@@ -268,12 +320,12 @@ impl MigrationTrait for Migration {
                     .col(
                         ColumnDef::new(OutboundParams::CallOptionsGasLimit)
                             .string()
-                            .not_null(),
+                            .null(),
                     )
                     .col(
                         ColumnDef::new(OutboundParams::CallOptionsIsArbitraryCall)
                             .boolean()
-                            .not_null(),
+                            .null(),
                     )
                     .col(
                         ColumnDef::new(OutboundParams::ConfirmationMode)
@@ -337,6 +389,14 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_cross_chain_tx_index_unique")
+                    .table(CrossChainTx::Table)
+                    .to_owned(),
+            )
+            .await?;
         manager
             .drop_table(Table::drop().table(Watermark::Table).to_owned())
             .await?;

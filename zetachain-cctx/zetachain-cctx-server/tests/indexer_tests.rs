@@ -20,8 +20,8 @@ use crate::data::{FIRST_PAGE_RESPONSE, SECOND_PAGE_RESPONSE, THIRD_PAGE_RESPONSE
 use sea_orm::PaginatorTrait;
 
 #[tokio::test]
-async fn test_historical_sync_with_pagination() {
-    let db = crate::helpers::init_db("test", "indexer_historical_sync").await;
+async fn test_historical_sync_updates_pointer() {
+    let db = crate::helpers::init_db("test", "historical_sync_updates_pointer").await;
     
     // Setup mock server
     let mock_server = MockServer::start().await;
@@ -40,7 +40,7 @@ async fn test_historical_sync_with_pagination() {
     let watermark_model = watermark::ActiveModel {
         id: ActiveValue::NotSet,
         watermark_type: ActiveValue::Set(WatermarkType::Historical),
-        pointer: ActiveValue::Set("FIRST_PAGE".to_string()), // Start from beginning
+        pointer: ActiveValue::Set("MH==".to_string()), // Start from beginning
         lock: ActiveValue::Set(false),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
@@ -133,6 +133,74 @@ async fn test_status_update() {
     setup_status_update_mock_responses(&mock_server).await;
     
 }
+
+#[tokio::test]
+async fn test_parse_historical_data() {
+    let db = crate::helpers::init_db("test", "indexer_parse_historical_data").await;
+    let mock_server = MockServer::start().await;
+    let mock_response = data::historic_response_from_file();
+    Mock::given(method("GET"))
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "true"))
+        .and(query_param("pagination.key", "MH=="))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::from_str::<serde_json::Value>(&mock_response).unwrap()
+        ))
+        .mount(&mock_server)
+        .await;
+
+    let client = Client::new(RpcSettings {
+        url: mock_server.uri().to_string(),
+        ..Default::default()
+    });
+
+    
+    //delete historical watermark
+    watermark::Entity::delete_many()
+        .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
+        .exec(db.client().as_ref())
+        .await
+        .unwrap();
+
+    let indexer = Indexer::new(
+        IndexerSettings {
+            polling_interval: 100, // Fast polling for tests
+            concurrency: 1,
+        },
+        db.client(),
+        Arc::new(client),
+    );
+
+    let indexer_handle = tokio::spawn(async move {
+        indexer.run().await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+    indexer_handle.abort();
+
+    let cctx_count = cross_chain_tx::Entity::find()
+        .count(db.client().as_ref())
+        .await
+        .unwrap();
+
+    assert_eq!(cctx_count, 100);
+
+        let first_page_cctx = cross_chain_tx::Entity::find()
+            .filter(cross_chain_tx::Column::Index.eq("0x000002f562490b9dfde6bad3c9823ef72a972b8bf559f6bd32e7c461b4e0ab76"))
+            .one(db.client().as_ref())
+            .await
+            .unwrap();
+
+    assert!(first_page_cctx.is_some());
+
+    let second_page_cctx = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq("0x000025d9fac0bcc7d9a381a365a2f415914bffe300ed728429b4538af036de98"))
+        .one(db.client().as_ref())
+        .await
+        .unwrap();
+    assert!(second_page_cctx.is_some());
+    
+}
 async fn setup_status_update_mock_responses(mock_server: &MockServer) {
 
     let pending_tx_index = "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759";
@@ -149,7 +217,7 @@ async fn setup_historical_mock_responses(mock_server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "true"))
-        .and(query_param("pagination.key", "FIRST_PAGE"))
+        .and(query_param("pagination.key", "MH=="))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             serde_json::from_str::<serde_json::Value>(FIRST_PAGE_RESPONSE).unwrap()
         ))
@@ -181,10 +249,21 @@ async fn setup_historical_mock_responses(mock_server: &MockServer) {
     let empty_response = serde_json::json!({
         "CrossChainTx": [],
         "pagination": {
-            "next_key": "",
+            "next_key": "////////22c=",
             "total": "0"
         }
     });
+
+     // Mock third page response when pagination.key == "THIRD_PAGE"
+     Mock::given(method("GET"))
+     .and(path("/crosschain/cctx"))
+     .and(query_param("unordered", "true"))
+     .and(query_param("pagination.key", "////////22c="))
+     .respond_with(ResponseTemplate::new(200).set_body_json(
+         serde_json::from_str::<serde_json::Value>(&empty_response.to_string()).unwrap()
+     ))
+     .mount(mock_server)
+     .await;
 
     // Mock realtime fetch response (unordered=false)
     Mock::given(method("GET"))

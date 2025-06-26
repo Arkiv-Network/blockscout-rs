@@ -77,11 +77,11 @@ pub struct OutboundParams {
     pub effective_gas_limit: String,
     pub tss_pubkey: String,
     pub tx_finalization_status: String,
-    pub call_options: CallOptions,
+    pub call_options: Option<CallOptions>,
     pub confirmation_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize,Clone)]
 pub struct CallOptions {
     pub gas_limit: String,
     pub is_arbitrary_call: bool,
