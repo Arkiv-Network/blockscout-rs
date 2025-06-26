@@ -126,7 +126,8 @@ impl MigrationTrait for Migration {
                     .col(
                         ColumnDef::new(CctxStatus::CrossChainTxId)
                             .integer()
-                            .not_null(),
+                            .not_null()
+                            .unique_key(),
                     )
                     .col(
                         ColumnDef::new(CctxStatus::Status)
@@ -198,7 +199,7 @@ impl MigrationTrait for Migration {
                             .string()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(InboundParams::TxOrigin).string().not_null())
+                    .col(ColumnDef::new(InboundParams::TxOrigin).string().unique_key().not_null())
                     .col(ColumnDef::new(InboundParams::CoinType).string().not_null())
                     .col(ColumnDef::new(InboundParams::Asset).string().null())
                     .col(ColumnDef::new(InboundParams::Amount).string().not_null())
@@ -286,7 +287,7 @@ impl MigrationTrait for Migration {
                             .string()
                             .null(),
                     )
-                    .col(ColumnDef::new(OutboundParams::Hash).string().null())
+                    .col(ColumnDef::new(OutboundParams::Hash).string().unique_key().not_null())
                     .col(ColumnDef::new(OutboundParams::BallotIndex).string().null())
                     .col(
                         ColumnDef::new(OutboundParams::ObservedExternalHeight)
@@ -359,7 +360,8 @@ impl MigrationTrait for Migration {
                     .col(
                         ColumnDef::new(RevertOptions::CrossChainTxId)
                             .integer()
-                            .not_null(),
+                            .not_null()
+                            .unique_key(),
                     )
                     .col(ColumnDef::new(RevertOptions::RevertAddress).string().null())
                     .col(

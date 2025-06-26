@@ -126,7 +126,7 @@ async fn gap_fill(
     Ok(())
 }
 
-async fn unlock_watermark(db: &DatabaseConnection, watermark: watermark::Model) -> anyhow::Result<()> {
+pub async fn unlock_watermark(db: &DatabaseConnection, watermark: watermark::Model) -> anyhow::Result<()> {
     let res = watermark::Entity::update(watermark::ActiveModel {
         lock: ActiveValue::Set(false),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
@@ -138,6 +138,16 @@ async fn unlock_watermark(db: &DatabaseConnection, watermark: watermark::Model) 
     .await?;
 
     tracing::info!("unlocked watermark: {:?}", res);
+    Ok(())
+}
+
+pub async fn lock_watermark(db: &DatabaseConnection, watermark: watermark::Model) -> anyhow::Result<()> {
+    watermark::Entity::update(watermark::ActiveModel {
+        lock:ActiveValue::Set(true),
+        ..Default::default()
+    }).filter(watermark::Column::Id.eq(watermark.id))
+    .exec(db)
+    .await?;
     Ok(())
 }
 async fn unlock_cctx(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
@@ -155,7 +165,8 @@ async fn historical_sync(
     client: &Client,
     watermark: watermark::Model,
 ) -> anyhow::Result<()> {
-    let pointer = watermark.pointer;
+    let pointer = watermark.pointer.clone();
+    
 
     let response = client
         .list_cctx(Some(pointer), true, 100)
@@ -164,28 +175,38 @@ async fn historical_sync(
     let cctxs = response.cross_chain_tx;
 
     //atomically insert cctxs and update watermark
-    let tx = db.begin().await?;
+    // let tx = db.begin().await?;
 
-    if let Err(e) = batch_insert_transactions(&tx, &cctxs).await {
+    if let Err(e) = batch_insert_transactions(db, &cctxs).await {
         tracing::error!(error = %e, "Failed to batch insert transactions");
         return Err(e);
     }
 
 
-    println!("setting response.pagination.next_key: {}", response.pagination.next_key);
-    watermark::Entity::update(watermark::ActiveModel {
-        id: ActiveValue::Set(watermark.id),
-        pointer: ActiveValue::Set(response.pagination.next_key),
-        lock: ActiveValue::Set(false),
-        updated_at: ActiveValue::Set(Utc::now().naive_utc()),
-        ..Default::default()
-    })
-    .filter(watermark::Column::Id.eq(watermark.id))
-    .exec(&tx)
-    .await?;
-    tx.commit().await?;
+    println!("setting response.pagination.next_key: {} for watermark: {}", response.pagination.next_key, watermark.id);
+
+    let watermark_id = watermark.id; // Store the ID before consuming watermark
+    let mut watermark_active:watermark::ActiveModel = watermark.into();
+    
+    // // Ensure the primary key is properly set for the update
+    watermark_active.id = ActiveValue::Unchanged(watermark_id);
+    watermark_active.pointer = ActiveValue::Set(response.pagination.next_key);
+    watermark_active.lock = ActiveValue::Set(false);
+    watermark_active.updated_at = ActiveValue::Set(Utc::now().naive_utc());
+    watermark_active.update(db).await?;
+
+    // watermark::Entity::update(watermark::ActiveModel {
+    //     lock:ActiveValue::Set(false),
+    //     ..Default::default()
+    // }).filter(watermark::Column::Id.eq(watermark_id))
+    // .exec(db)
+    // .await?;
+    // db.commit().await?;
+    
     Ok(())
 }
+
+
 
 async fn realtime_fetch(db: &DatabaseConnection, client: &Client) -> anyhow::Result<()> {
     let response = client
@@ -562,38 +583,38 @@ async fn batch_insert_transactions<C: ConnectionTrait>(
         .await?;
     }
     
-    if !inbound_models.is_empty() {
-        inbound_params::Entity::insert_many(inbound_models).on_conflict(
-            sea_orm::sea_query::OnConflict::column(inbound_params::Column::CrossChainTxId)
-                .do_nothing()
-                .to_owned(),
-        )
-        .exec(db)
-        .instrument(tracing::info_span!("inserting inbound_params"))
-        .await?;
-    }
+    // if !inbound_models.is_empty() {
+    //     inbound_params::Entity::insert_many(inbound_models).on_conflict(
+    //         sea_orm::sea_query::OnConflict::columns([inbound_params::Column::TxOrigin, inbound_params::Column::CrossChainTxId])
+    //             .do_nothing()
+    //             .to_owned(),
+    //     )
+    //     .exec(db)
+    //     .instrument(tracing::info_span!("inserting inbound_params"))
+    //     .await?;
+    // }
     
-    if !outbound_models.is_empty() {
-        outbound_params::Entity::insert_many(outbound_models).on_conflict(
-            sea_orm::sea_query::OnConflict::column(outbound_params::Column::CrossChainTxId)
-                .do_nothing()
-                .to_owned(),
-        )
-        .exec(db)
-        .instrument(tracing::info_span!("inserting outbound_params"))
-        .await?;
-    }
+    // if !outbound_models.is_empty() {
+    //     outbound_params::Entity::insert_many(outbound_models).on_conflict(
+    //         sea_orm::sea_query::OnConflict::columns([outbound_params::Column::Hash, outbound_params::Column::CrossChainTxId])
+    //             .do_nothing()
+    //             .to_owned(),
+    //     )
+    //     .exec(db)
+    //     .instrument(tracing::info_span!("inserting outbound_params"))
+    //     .await?;
+    // }
     
-    if !revert_models.is_empty() {
-        revert_options::Entity::insert_many(revert_models).on_conflict(
-            sea_orm::sea_query::OnConflict::column(revert_options::Column::CrossChainTxId)
-                .do_nothing()
-                .to_owned(),
-        )
-        .exec(db)
-        .instrument(tracing::info_span!("inserting revert_options"))
-        .await?;
-    }
+    // if !revert_models.is_empty() {
+    //     revert_options::Entity::insert_many(revert_models).on_conflict(
+    //         sea_orm::sea_query::OnConflict::column(revert_options::Column::CrossChainTxId)
+    //             .do_nothing()
+    //             .to_owned(),
+    //     )
+    //     .exec(db)
+    //     .instrument(tracing::info_span!("inserting revert_options"))
+    //     .await?;
+    // }
 
     Ok(())
 }
@@ -780,6 +801,7 @@ impl Indexer {
                 if let Some(watermark) = watermarks {
                     let mut model: watermark::ActiveModel = watermark.clone().into();
                     let job_id = Uuid::new_v4();
+                    model.id = ActiveValue::Unchanged(watermark.id); // Ensure primary key is set
                     model.lock = ActiveValue::Set(true);
                     model.updated_at = ActiveValue::Set(Utc::now().naive_utc());
                     model.update(db.as_ref()).await.unwrap();
