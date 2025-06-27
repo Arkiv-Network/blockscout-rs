@@ -10,6 +10,7 @@ use reqwest::{Method, Request, Response, Url};
 use serde::Deserialize;
 use tokio::time::timeout;
 use tracing::Instrument;
+use uuid::Uuid;
 
 use crate::models::{CCTXResponse, CrossChainTx, PagedCCTXResponse};
 
@@ -88,16 +89,17 @@ impl Client {
 
     pub async fn list_cctx(
         &self,
-        pagination_key: Option<String>,
+        pagination_key: Option<&str>,
         unordered: bool,
-        pagination_limit: u32,
+        batch_size: u32,
+        job_id: Uuid,
     ) -> Result<PagedCCTXResponse, Error> {
         let mut url: Url = self.settings.url.parse().unwrap();
         let path = url.path();
         //add "/cctx" to the path
         url.set_path(&format!("{}crosschain/cctx", path));
         url.query_pairs_mut()
-            .append_pair("pagination.limit", &pagination_limit.to_string())
+            .append_pair("pagination.limit", &batch_size.to_string())
             .append_pair("unordered", &unordered.to_string())
             .finish();
 
@@ -109,7 +111,7 @@ impl Client {
         let request = Request::new(Method::GET, url.clone());
         let response = self
             .make_request(request)
-            .instrument(tracing::debug_span!("executing list_cctx", url = url.as_str()))
+            .instrument(tracing::debug_span!("executing list_cctx", url = url.as_str(), job_id = %job_id))
             .await?
             .error_for_status()
             .map_err(|e| anyhow::anyhow!("HTTP request error: {}", e))?;

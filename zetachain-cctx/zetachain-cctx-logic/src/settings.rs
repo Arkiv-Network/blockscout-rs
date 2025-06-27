@@ -7,6 +7,9 @@ use serde::Deserialize;
 pub struct IndexerSettings {
    pub concurrency: u32,
    pub polling_interval: u64,
+   pub historical_batch_size: u32,
+   pub status_update_batch_size: u32,
+   pub realtime_fetch_batch_size: u32,
 }
 
 
@@ -22,6 +25,9 @@ impl Default for IndexerSettings {
         Self {
             concurrency: default_concurrency(), 
             polling_interval: 1000,
+            historical_batch_size: 100,
+            status_update_batch_size: 100,
+            realtime_fetch_batch_size: 100,
         }
     }
 }

@@ -24,6 +24,18 @@ use tracing::{instrument, Instrument};
 use sea_orm::TransactionTrait;
 
 use futures::stream::{select_with_strategy, PollNext};
+
+/// Sanitizes strings by removing null bytes and replacing invalid UTF-8 sequences
+/// PostgreSQL UTF-8 encoding doesn't allow null bytes (0x00)
+fn sanitize_string(input: String) -> String {
+    // Remove null bytes and replace invalid UTF-8 sequences
+    input
+        .chars()
+        .filter(|&c| c != '\0')  // Remove null bytes
+        .collect::<String>()
+        .replace('\u{FFFD}', "?")  // Replace replacement character with question mark
+}
+
 pub struct Indexer {
     pub settings: IndexerSettings,
     pub db: Arc<DatabaseConnection>,
@@ -36,7 +48,9 @@ enum IndexerJob {
     HistoricalDataFetch(watermark::Model, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
 }
 
+#[instrument(skip(db, client), fields(job_id = %job_id))]
 async fn update_cctx_status(
+    job_id: Uuid,
     db: &DatabaseConnection,
     client: &Client,
     existing_cctx: cross_chain_tx::Model,
@@ -86,13 +100,14 @@ async fn update_cctx_status(
 
     Ok(())
 }
+#[instrument(skip(db, client), fields(job_id = %job_id))]
 async fn gap_fill(
+    job_id: Uuid,
     db: &DatabaseConnection,
     client: &Client,
     watermark: watermark::Model,
 ) -> anyhow::Result<()> {
-    let pointer = watermark.pointer;
-    let response = client.list_cctx(Some(pointer), true, 100).await.unwrap();
+    let response = client.list_cctx(Some(&watermark.pointer), true, 100,job_id).await.unwrap();
     let cctxs = response.cross_chain_tx;
     let last_cctx = cctxs.last().unwrap();
     let last_cctx = cross_chain_tx::Entity::find()
@@ -120,12 +135,13 @@ async fn gap_fill(
     }
     
     // Batch insert all transactions
-    batch_insert_transactions(&tx, &cctxs).await?;
+    batch_insert_transactions(job_id, &tx, &cctxs).await?;
     
     tx.commit().await?;
     Ok(())
 }
 
+#[instrument(skip(db), fields(watermark_id = %watermark.id))]
 pub async fn unlock_watermark(db: &DatabaseConnection, watermark: watermark::Model) -> anyhow::Result<()> {
     let res = watermark::Entity::update(watermark::ActiveModel {
         id: ActiveValue::Unchanged(watermark.id),
@@ -163,68 +179,45 @@ async fn unlock_cctx(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
     .await?;
     Ok(())
 }
+#[instrument(skip(db, client), fields(job_id = %job_id))]
 async fn historical_sync(
     db: &DatabaseConnection,
     client: &Client,
     watermark: watermark::Model,
     job_id: Uuid,
+    batch_size: u32,
 ) -> anyhow::Result<()> {
-    let pointer = watermark.pointer.clone();
-    
-
     let response = client
-        .list_cctx(Some(pointer), true, 100)
-        .instrument( tracing::info_span!("historical_sync", span_id = %job_id))
+        .list_cctx(Some(&watermark.pointer), true, batch_size,job_id)
+        .instrument( tracing::info_span!("fetching historical data from node", job_id = %job_id))
         .await?;
-
-    match response {
-        PagedCCTXResponse {cross_chain_tx, pagination} => {
-            let cctxs = cross_chain_tx;
-            println!("job_id: {} got pagination: {:?}", job_id, pagination);
-            
-
+    let cross_chain_txs = response.cross_chain_tx;
+    let pagination = response.pagination;
     //atomically insert cctxs and update watermark
     let tx = db.begin().await?;
-    println!("job_id: {} created tx", job_id);
-    if let Err(e) = batch_insert_transactions(&tx, &cctxs).await {
-        println!("job_id: {} failed to batch insert transactions, error: {:?}", job_id, e);
-        tracing::error!(error = %e, "Failed to batch insert transactions");
+    if let Err(e) = batch_insert_transactions(job_id, &tx, &cross_chain_txs).await {
+        tracing::error!(error = %e, "Failed to batch insert transactions, pointer = {}", watermark.pointer);
+        tracing::error!("cross_chain_txs: {:?}", cross_chain_txs);
         return Err(e);
     }
-
-
-    println!("setting response.pagination.next_key: {} for watermark: {}", pagination.next_key, watermark.id);
-
-    let watermark_id = watermark.id; // Store the ID before consuming watermark
+    let watermark_id = watermark.id; 
     let mut watermark_active:watermark::ActiveModel = watermark.into();
-    
-    // // Ensure the primary key is properly set for the update
     watermark_active.id = ActiveValue::Unchanged(watermark_id);
     watermark_active.pointer = ActiveValue::Set(pagination.next_key);
     watermark_active.lock = ActiveValue::Set(false);
     watermark_active.updated_at = ActiveValue::Set(Utc::now().naive_utc());
     watermark_active.update(&tx).await?;
-
-    // watermark::Entity::update(watermark::ActiveModel {
-    //     lock:ActiveValue::Set(false),
-    //     ..Default::default()
-    // }).filter(watermark::Column::Id.eq(watermark_id))
-    // .exec(db)
-    // .await?;
     tx.commit().await?;
-        }
-    }
-    
-    
     Ok(())
 }
 
 
 
-async fn realtime_fetch(db: &DatabaseConnection, client: &Client) -> anyhow::Result<()> {
+#[instrument(skip(db, client), fields(job_id = %job_id))]
+async fn realtime_fetch(job_id: Uuid,db: &DatabaseConnection, client: &Client) -> anyhow::Result<()> {
     let response = client
-        .list_cctx(None, false, 10)
-        .instrument(tracing::info_span!("requesting realtime cctxs"))
+        .list_cctx(None, false, 10, job_id)
+        .instrument(tracing::info_span!("requesting realtime cctxs", job_id = %job_id))
         .await
         .unwrap();
     let txs = response.cross_chain_tx;
@@ -240,7 +233,7 @@ async fn realtime_fetch(db: &DatabaseConnection, client: &Client) -> anyhow::Res
     let latest_loaded = cross_chain_tx::Entity::find()
         .filter(cross_chain_tx::Column::Index.eq(&latest_fetched.index))
         .one(db)
-        .instrument(tracing::info_span!("query first cctx"))
+        .instrument(tracing::info_span!("query latest cctx from db", job_id = %job_id))
         .await
         .unwrap();
 
@@ -254,7 +247,7 @@ async fn realtime_fetch(db: &DatabaseConnection, client: &Client) -> anyhow::Res
     let earliest_loaded = cross_chain_tx::Entity::find()
         .filter(cross_chain_tx::Column::Index.eq(&earliest_fetched.index))
             .one(db)
-            .instrument(tracing::info_span!("query last cctx"))
+            .instrument(tracing::info_span!("query earliest cctx from db", job_id = %job_id))
             .await
             .unwrap();
     
@@ -271,12 +264,12 @@ async fn realtime_fetch(db: &DatabaseConnection, client: &Client) -> anyhow::Res
                 updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
             })
             .exec(db)
-            .instrument(tracing::info_span!("creating new realtime watermark"))
+            .instrument(tracing::info_span!("creating new realtime watermark", job_id = %job_id))
             .await
             .unwrap();
     } 
 
-    if let Err(e) = batch_insert_transactions(db, &txs).await {
+    if let Err(e) = batch_insert_transactions(job_id, db, &txs).await {
         tracing::error!(error = %e, "Failed to batch insert transactions");
         return Err(e);
     }
@@ -284,9 +277,10 @@ async fn realtime_fetch(db: &DatabaseConnection, client: &Client) -> anyhow::Res
     Ok(())
 }
 
-#[instrument(skip(db, tx), fields(tx_index = %tx.index))]
-async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> anyhow::Result<()> {
+#[instrument(skip(db, tx), fields(tx_index = %tx.index, job_id = %job_id))]
+async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx, job_id: Uuid) -> anyhow::Result<()> {
     // Insert main cross_chain_tx record
+    let index = tx.index.clone();
     let cctx_model = cross_chain_tx::ActiveModel {
         id: ActiveValue::NotSet,
         creator: ActiveValue::Set(tx.creator),
@@ -305,7 +299,7 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
                 .to_owned(),
         )
         .exec(db)
-        .instrument(tracing::info_span!("insert_tx"))
+        .instrument(tracing::info_span!("inserting cctx", index = %index, job_id = %job_id))
         .await?;
 
     // Get the inserted tx id
@@ -316,8 +310,8 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
         id: ActiveValue::NotSet,
         cross_chain_tx_id: ActiveValue::Set(tx_id),
         status: ActiveValue::Set(CctxStatusStatus::try_from(tx.cctx_status.status.clone()).map_err(|e| anyhow::anyhow!(e))?),
-        status_message: ActiveValue::Set(Some(tx.cctx_status.status_message)),
-        error_message: ActiveValue::Set(Some(tx.cctx_status.error_message)),
+        status_message: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.status_message))),
+        error_message: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message))),
         last_update_timestamp: ActiveValue::Set(
             // parse NaiveDateTime from epoch seconds
             chrono::DateTime::from_timestamp(
@@ -329,17 +323,13 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
         ),
         is_abort_refunded: ActiveValue::Set(tx.cctx_status.is_abort_refunded),
         created_timestamp: ActiveValue::Set(tx.cctx_status.created_timestamp),
-        error_message_revert: ActiveValue::Set(Some(tx.cctx_status.error_message_revert)),
-        error_message_abort: ActiveValue::Set(Some(tx.cctx_status.error_message_abort)),
+        error_message_revert: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message_revert))),
+        error_message_abort: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message_abort))),
     };
     cctx_status::Entity::insert(status_model)
         .exec(db)
-        .instrument(tracing::info_span!("insert_cctx_status"))
-        .await
-        .map_err(|e| {
-            println!("insert_cctx_status error: {}", e);
-            e
-        })?;
+        .instrument(tracing::info_span!("inserting cctx_status", index = %index, job_id = %job_id))
+        .await?;
 
     // Insert inbound_params
     let inbound_model = inbound_params::ActiveModel {
@@ -365,12 +355,8 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
     };
     inbound_params::Entity::insert(inbound_model)
         .exec(db)
-        .instrument(tracing::info_span!("insert_inbound_params"))
-        .await
-        .map_err(|e| {
-            println!("insert_inbound_params error: {}", e);
-            e
-        })?;
+        .instrument(tracing::info_span!("inserting inbound_params", index = %index, job_id = %job_id))
+        .await?;
 
     // Insert outbound_params
     for outbound in tx.outbound_params {
@@ -404,12 +390,8 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
         };
         outbound_params::Entity::insert(outbound_model)
             .exec(db)
-            .instrument(tracing::info_span!("insert_outbound_params"))
-            .await
-            .map_err(|e| {
-                println!("insert_outbound_params error: {}", e);
-                e
-            })?;
+            .instrument(tracing::info_span!("inserting outbound_params", index = %index, job_id = %job_id))
+            .await?;
     }
 
     // Insert revert_options
@@ -424,18 +406,16 @@ async fn insert_transaction<C: ConnectionTrait>(db: &C, tx: CrossChainTx) -> any
     };
     revert_options::Entity::insert(revert_model)
         .exec(db)
-        .instrument(tracing::info_span!("insert_revert_options"))
-        .await
-        .map_err(|e| {
-            println!("insert_revert_options error: {}", e);
-            e
-        })?;
+        .instrument(tracing::info_span!("inserting revert_options", index = %index, job_id = %job_id))
+        .await?;
 
     Ok(())
 }
 
 /// Batch insert multiple CrossChainTx records with their child entities
+#[instrument(skip(db, transactions), fields(job_id = %job_id))]
 async fn batch_insert_transactions<C: ConnectionTrait>(
+    job_id: Uuid,
     db: &C,
     transactions: &Vec<CrossChainTx>,
 ) -> anyhow::Result<()> {
@@ -473,6 +453,7 @@ async fn batch_insert_transactions<C: ConnectionTrait>(
                 .to_owned(),
         )
         .exec(db)
+        .instrument(tracing::info_span!("inserting cctxs", job_id = %job_id))
         .await?;
 
     // Get the inserted IDs - we need to query them since we can't get them from insert_many
@@ -496,8 +477,8 @@ async fn batch_insert_transactions<C: ConnectionTrait>(
                 id: ActiveValue::NotSet,
                 cross_chain_tx_id: ActiveValue::Set(tx_id),
                 status: ActiveValue::Set(CctxStatusStatus::try_from(tx.cctx_status.status.clone()).map_err(|e| anyhow::anyhow!(e))?),
-                status_message: ActiveValue::Set(Some(tx.cctx_status.status_message.clone())),
-                error_message: ActiveValue::Set(Some(tx.cctx_status.error_message.clone())),
+                status_message: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.status_message.clone()))),
+                error_message: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message.clone()))),
                 last_update_timestamp: ActiveValue::Set(
                     chrono::DateTime::from_timestamp(
                         tx.cctx_status.last_update_timestamp.parse::<i64>().unwrap(),
@@ -508,8 +489,8 @@ async fn batch_insert_transactions<C: ConnectionTrait>(
                 ),
                 is_abort_refunded: ActiveValue::Set(tx.cctx_status.is_abort_refunded),
                 created_timestamp: ActiveValue::Set(tx.cctx_status.created_timestamp.clone()),
-                error_message_revert: ActiveValue::Set(Some(tx.cctx_status.error_message_revert.clone())),
-                error_message_abort: ActiveValue::Set(Some(tx.cctx_status.error_message_abort.clone())),
+                error_message_revert: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message_revert.clone()))),
+                error_message_abort: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message_abort.clone()))),
             };
             status_models.push(status_model);
 
@@ -592,43 +573,10 @@ async fn batch_insert_transactions<C: ConnectionTrait>(
                 .to_owned(),
         )
         .exec(db)
-        .instrument(tracing::info_span!("inserting cctx_status"))
+        .instrument(tracing::info_span!("inserting cctx_status", job_id = %job_id))
         .await?;
     }
     
-    // if !inbound_models.is_empty() {
-    //     inbound_params::Entity::insert_many(inbound_models).on_conflict(
-    //         sea_orm::sea_query::OnConflict::columns([inbound_params::Column::TxOrigin, inbound_params::Column::CrossChainTxId])
-    //             .do_nothing()
-    //             .to_owned(),
-    //     )
-    //     .exec(db)
-    //     .instrument(tracing::info_span!("inserting inbound_params"))
-    //     .await?;
-    // }
-    
-    // if !outbound_models.is_empty() {
-    //     outbound_params::Entity::insert_many(outbound_models).on_conflict(
-    //         sea_orm::sea_query::OnConflict::columns([outbound_params::Column::Hash, outbound_params::Column::CrossChainTxId])
-    //             .do_nothing()
-    //             .to_owned(),
-    //     )
-    //     .exec(db)
-    //     .instrument(tracing::info_span!("inserting outbound_params"))
-    //     .await?;
-    // }
-    
-    // if !revert_models.is_empty() {
-    //     revert_options::Entity::insert_many(revert_models).on_conflict(
-    //         sea_orm::sea_query::OnConflict::column(revert_options::Column::CrossChainTxId)
-    //             .do_nothing()
-    //             .to_owned(),
-    //     )
-    //     .exec(db)
-    //     .instrument(tracing::info_span!("inserting revert_options"))
-    //     .await?;
-    // }
-
     Ok(())
 }
 
@@ -654,9 +602,8 @@ impl Indexer {
         let client = self.client.clone();
         tokio::spawn(async move {
             loop {
-                let span_id = Uuid::new_v4();
-                realtime_fetch(&db, &client)
-                .instrument(tracing::info_span!("processing realtime fetch job", span_id = %span_id))
+                let job_id = Uuid::new_v4();
+                realtime_fetch(job_id, &db, &client)
                 .await
                 .unwrap();
                 tokio::time::sleep(Duration::from_millis(polling_interval)).await;
@@ -718,10 +665,11 @@ impl Indexer {
         .unwrap();
 
         tracing::info!("setup completed, initializing streams");
+        let status_update_batch_size = self.settings.status_update_batch_size;
         let status_update_stream = Box::pin(async_stream::stream! {
             loop {
 
-                let statement = r#"
+                let statement = format!(r#"
                 WITH cctxs AS (
                     SELECT cctx.id, cctx.index, cctx.last_status_update_timestamp
                     FROM cross_chain_tx cctx
@@ -729,14 +677,17 @@ impl Indexer {
                     WHERE cs.status IN ('PendingInbound', 'PendingOutbound', 'PendingRevert')
                     AND cctx.lock = false
                     ORDER BY cctx.last_status_update_timestamp ASC
-                    LIMIT 100
+                    LIMIT {status_update_batch_size}
                     FOR UPDATE SKIP LOCKED
                 )
                 UPDATE cross_chain_tx cctx
                 SET lock = true, last_status_update_timestamp = NOW()
                 WHERE id IN (SELECT id FROM cctxs)
                 RETURNING id, index, last_status_update_timestamp, lock, creator, index, relayed_message, protocol_contract_version, zeta_fees
-                "#;
+                "#
+            );
+
+            println!("{statement}");
 
                 let statement = Statement::from_sql_and_values(
                     DbBackend::Postgres,
@@ -802,23 +753,25 @@ impl Indexer {
         let db = self.db.clone();
         let historical_stream = Box::pin(async_stream::stream! {
             loop {
+                let job_id = Uuid::new_v4();
                 let watermarks = watermark::Entity::find()
                     .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
                     .filter(watermark::Column::Lock.eq(false))
                     .one(db.as_ref())
-                    .instrument(tracing::info_span!("looking for historical watermark"))
+                    .instrument(tracing::info_span!("looking for historical watermark",job_id = %job_id))
                     .await
                     .unwrap();
 
                     //TODO: add updated_by field to watermark model
                 if let Some(watermark) = watermarks {
                     let mut model: watermark::ActiveModel = watermark.clone().into();
-                    let job_id = Uuid::new_v4();
                     model.id = ActiveValue::Unchanged(watermark.id); // Ensure primary key is set
                     model.lock = ActiveValue::Set(true);
                     model.updated_at = ActiveValue::Set(Utc::now().naive_utc());
                     model.update(db.as_ref()).await.unwrap();
                     yield IndexerJob::HistoricalDataFetch(watermark, job_id);
+                } else {
+                    tracing::info!("job_id: {} historical watermark is absent or locked", job_id);
                 }
                 
 
@@ -839,31 +792,29 @@ impl Indexer {
             .for_each_concurrent(Some(self.settings.concurrency as usize), |job| {
                 let client = self.client.clone();
                 let db = self.db.clone();
+                let batch_size = self.settings.historical_batch_size;
                 tokio::spawn(async move {
                     match job {
-                        IndexerJob::StatusUpdate(existing_cctx, span_id) => {
+                        IndexerJob::StatusUpdate(existing_cctx, job_id) => {
                             let cctx_id = existing_cctx.id;
-                            if let Err(e) =    update_cctx_status(&db, &client, existing_cctx)
-                            .instrument(tracing::info_span!("processing status update job", span_id = %span_id))
+                            if let Err(e) =    update_cctx_status(job_id, &db, &client, existing_cctx)
                             .await {
-                                tracing::error!(error = %e, span_id = %span_id, "Failed to update cctx status");
+                                tracing::error!(error = %e, job_id = %job_id, "Failed to update cctx status");
                                 unlock_cctx(&db, cctx_id).await.unwrap();
                             }
                         }
-                        IndexerJob::GapFill(watermark, span_id) => {
-                            if let Err(e) = gap_fill(&db, &client, watermark.clone())
-                            .instrument(tracing::info_span!("processing gap fill job", span_id = %span_id))
+                        IndexerJob::GapFill(watermark, job_id) => {
+                            if let Err(e) = gap_fill(job_id, &db, &client, watermark.clone())
                             .await {
-                                tracing::error!(error = %e, span_id = %span_id, "Failed to fetch gap fill data");
+                                tracing::error!(error = %e, job_id = %job_id, "Failed to fetch gap fill data");
                             }
                             unlock_watermark(&db, watermark).await.unwrap();
                         }
-                        IndexerJob::HistoricalDataFetch(watermark, span_id) => { 
-                            if let Err(e) =historical_sync(&db, &client, watermark.clone(), span_id)
-                            .instrument(tracing::info_span!("processing historical data fetch job", span_id = %span_id))
+                        IndexerJob::HistoricalDataFetch(watermark, job_id) => { 
+                            if let Err(e) =historical_sync(&db, &client, watermark.clone(), job_id, batch_size)
                             .await {
-                                tracing::error!(error = %e, span_id = %span_id, "Failed to fetch historical data");
-                                unlock_watermark(&db, watermark).instrument(tracing::info_span!("unlocking watermark", span_id = %span_id)).await.unwrap();
+                                tracing::error!(error = %e, job_id = %job_id, "Failed to fetch historical data");
+                                unlock_watermark(&db, watermark).await.unwrap();
                             }
                             // unlock_watermark(&db, watermark).await.unwrap();
                         }

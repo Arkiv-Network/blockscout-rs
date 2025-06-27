@@ -62,6 +62,7 @@ async fn test_historical_sync_updates_pointer() {
         IndexerSettings {
             polling_interval: 100, // Fast polling for tests
             concurrency: 1,
+            ..Default::default()
         },
         db_conn.clone(),
         Arc::new(client),
@@ -176,6 +177,7 @@ async fn test_parse_historical_data() {
         IndexerSettings {
             polling_interval: 100, // Fast polling for tests
             concurrency: 1,
+            ..Default::default()
         },
         db.client().clone(),
         Arc::new(client),
