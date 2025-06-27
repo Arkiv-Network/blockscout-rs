@@ -7,6 +7,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
+    #[sea_orm(unique)]
     pub cross_chain_tx_id: i32,
     pub revert_address: Option<String>,
     pub call_on_revert: bool,

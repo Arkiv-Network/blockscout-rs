@@ -18,7 +18,52 @@ pub enum CctxStatusStatus {
     #[sea_orm(string_value = "OutboundMined")]
     OutboundMined,
 }
-
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "coin_type")]
+pub enum CoinType {
+    #[sea_orm(string_value = "Zeta")]
+    Zeta,
+    #[sea_orm(string_value = "Gas")]
+    Gas,
+    #[sea_orm(string_value = "ERC20")]
+    Erc20,
+    #[sea_orm(string_value = "Cmd")]
+    Cmd,
+    #[sea_orm(string_value = "NoAssetCall")]
+    NoAssetCall,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "confirmation_mode")]
+pub enum ConfirmationMode {
+    #[sea_orm(string_value = "SAFE")]
+    Safe,
+    #[sea_orm(string_value = "FAST")]
+    Fast,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "inbound_status")]
+pub enum InboundStatus {
+    #[sea_orm(string_value = "SUCCESS")]
+    Success,
+    #[sea_orm(string_value = "INSUFFICIENT_DEPOSITOR_FEE")]
+    InsufficientDepositorFee,
+    #[sea_orm(string_value = "INVALID_RECEIVER_ADDRESS")]
+    InvalidReceiverAddress,
+    #[sea_orm(string_value = "INVALID_MEMO")]
+    InvalidMemo,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "protocol_contract_version"
+)]
+pub enum ProtocolContractVersion {
+    #[sea_orm(string_value = "V1")]
+    V1,
+    #[sea_orm(string_value = "V2")]
+    V2,
+}
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(
     rs_type = "String",

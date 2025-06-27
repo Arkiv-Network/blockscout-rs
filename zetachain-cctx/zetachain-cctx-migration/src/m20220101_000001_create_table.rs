@@ -19,6 +19,18 @@ impl MigrationTrait for Migration {
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'cctx_status_status') THEN
                     CREATE TYPE cctx_status_status AS ENUM ('PendingInbound', 'PendingOutbound', 'PendingRevert', 'Aborted', 'Reverted', 'OutboundMined');
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'inbound_status') THEN
+                    CREATE TYPE inbound_status AS ENUM ('SUCCESS', 'INSUFFICIENT_DEPOSITOR_FEE', 'INVALID_RECEIVER_ADDRESS', 'INVALID_MEMO');
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'confirmation_mode') THEN
+                    CREATE TYPE confirmation_mode AS ENUM ('SAFE', 'FAST');
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'coin_type') THEN
+                    CREATE TYPE coin_type AS ENUM ('Zeta', 'Gas', 'ERC20', 'Cmd', 'NoAssetCall');
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'protocol_contract_version') THEN
+                    CREATE TYPE protocol_contract_version AS ENUM ('V1', 'V2');
+                END IF;
             END $$;"#,
         )
         .await?;
@@ -93,7 +105,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(CrossChainTx::ProtocolContractVersion)
-                            .string()
+                            .enumeration("protocol_contract_version", ["V1", "V2"])
                             .not_null(),
                     )
                     .to_owned(),
@@ -159,8 +171,8 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(CctxStatus::CreatedTimestamp)
-                            .string()
-                            .not_null(),
+                            .date_time()
+                            .null(),
                     )
                     .col(ColumnDef::new(CctxStatus::ErrorMessageRevert).text().null())
                     .col(ColumnDef::new(CctxStatus::ErrorMessageAbort).text().null())
@@ -200,7 +212,7 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(InboundParams::TxOrigin).string().unique_key().not_null())
-                    .col(ColumnDef::new(InboundParams::CoinType).string().not_null())
+                    .col(ColumnDef::new(InboundParams::CoinType).enumeration("coin_type", ["Zeta", "Gas", "ERC20", "Cmd", "NoAssetCall"]).not_null())
                     .col(ColumnDef::new(InboundParams::Asset).string().null())
                     .col(ColumnDef::new(InboundParams::Amount).string().not_null())
                     .col(
@@ -236,10 +248,14 @@ impl MigrationTrait for Migration {
                             .boolean()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(InboundParams::Status).string().not_null())
+                    .col(
+                        ColumnDef::new(InboundParams::Status)
+                            .enumeration("inbound_status", ["SUCCESS", "INSUFFICIENT_DEPOSITOR_FEE", "INVALID_RECEIVER_ADDRESS", "INVALID_MEMO"])
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(InboundParams::ConfirmationMode)
-                            .string()
+                            .enumeration("confirmation_mode", ["SAFE", "FAST"])
                             .not_null(),
                     )
                     .foreign_key(
@@ -277,7 +293,7 @@ impl MigrationTrait for Migration {
                             .string()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(OutboundParams::CoinType).string().not_null())
+                    .col(ColumnDef::new(OutboundParams::CoinType).enumeration("coin_type", ["Zeta", "Gas", "ERC20", "Cmd", "NoAssetCall"]).not_null())
                     .col(ColumnDef::new(OutboundParams::Amount).string().not_null())
                     .col(ColumnDef::new(OutboundParams::TssNonce).string().not_null())
                     .col(ColumnDef::new(OutboundParams::GasLimit).string().not_null())
@@ -330,7 +346,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(OutboundParams::ConfirmationMode)
-                            .string()
+                            .enumeration("confirmation_mode", ["SAFE", "FAST"])
                             .not_null(),
                     )
                     .foreign_key(

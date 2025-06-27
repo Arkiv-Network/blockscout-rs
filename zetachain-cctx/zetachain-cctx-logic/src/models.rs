@@ -1,3 +1,4 @@
+use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,7 +36,7 @@ pub struct CctxStatus {
     pub last_update_timestamp: String,
     #[serde(rename = "isAbortRefunded")]
     pub is_abort_refunded: bool,
-    pub created_timestamp: String,
+    pub created_timestamp: Option<DateTime>,
     pub error_message_revert: String,
     pub error_message_abort: String,
 }

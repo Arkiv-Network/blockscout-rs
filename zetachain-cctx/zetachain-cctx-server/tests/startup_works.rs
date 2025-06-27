@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use blockscout_service_launcher::test_server;
 use pretty_assertions::assert_eq;
-use wiremock::MockServer;
+
 use zetachain_cctx_logic::client::{Client, RpcSettings};
-use crate::data::{FIRST_PAGE_RESPONSE, SECOND_PAGE_RESPONSE, THIRD_PAGE_RESPONSE};
+
 
 #[tokio::test]
 #[ignore = "Needs database to run"]

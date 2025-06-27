@@ -12,9 +12,7 @@ use zetachain_cctx_entity::{
     cross_chain_tx, watermark, sea_orm_active_enums::WatermarkType,
 };
 use zetachain_cctx_logic::{
-    client::{Client, RpcSettings},
-    indexer::{lock_watermark, unlock_watermark, Indexer},
-    settings::IndexerSettings,
+    client::{Client, RpcSettings}, database::ZetachainCctxDatabase, indexer::{lock_watermark, unlock_watermark, Indexer}, settings::IndexerSettings
 };
 use crate::data::{FIRST_PAGE_RESPONSE, SECOND_PAGE_RESPONSE, THIRD_PAGE_RESPONSE, PENDING_TX_RESPONSE,FINALIZED_TX_RESPONSE};
 use sea_orm::PaginatorTrait;
@@ -66,6 +64,7 @@ async fn test_historical_sync_updates_pointer() {
         },
         db_conn.clone(),
         Arc::new(client),
+        Arc::new(ZetachainCctxDatabase::new(db_conn.clone())),
     );
     
     // Run indexer for a short time to process historical data
@@ -73,7 +72,7 @@ async fn test_historical_sync_updates_pointer() {
         // Run for a limited time to avoid infinite loop
         let timeout_duration = Duration::from_secs(5);
         tokio::time::timeout(timeout_duration, async {
-            indexer.run().await;
+            let _ = indexer.run().await;
         })
         .await
         .unwrap_or_else(|_| {
@@ -181,6 +180,7 @@ async fn test_parse_historical_data() {
         },
         db.client().clone(),
         Arc::new(client),
+        Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
     );
     
     // Run indexer for a short time to process historical data
@@ -188,7 +188,7 @@ async fn test_parse_historical_data() {
         // Run for a limited time to avoid infinite loop
         let timeout_duration = Duration::from_secs(5);
         tokio::time::timeout(timeout_duration, async {
-            indexer.run().await;
+            let _ = indexer.run().await;
         })
         .await
         .unwrap_or_else(|_| {

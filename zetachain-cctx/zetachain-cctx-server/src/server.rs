@@ -11,7 +11,7 @@ use blockscout_service_launcher::{
     launcher::{self, GracefulShutdownHandler, LaunchSettings}, tracing};
 
 use sea_orm::DatabaseConnection;
-use zetachain_cctx_logic::{client::Client, indexer::Indexer};
+use zetachain_cctx_logic::{client::Client, database::ZetachainCctxDatabase, indexer::Indexer};
 use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::cctx_info_service_actix::route_cctx_info_service;
 
 use std::sync::Arc;
@@ -42,12 +42,14 @@ impl launcher::HttpRouter for Router {
 pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Client>) -> Result<(), anyhow::Error> {
     tracing::init_logs(SERVICE_NAME, &settings.tracing, &settings.jaeger)?;
 
+    let database = Arc::new(ZetachainCctxDatabase::new(db.clone()));
     let health = Arc::new(HealthService::default());
-    let cctx = Arc::new(CctxService::new(db.clone()));
-    let indexer = Indexer::new(settings.indexer, db, client);
+    let cctx = Arc::new(CctxService::new(database.clone()));
+    let indexer = Indexer::new(settings.indexer, db, client, database);
 
     tokio::spawn(async move {
-        indexer.run().await;
+        //TODO: handle error, log it and restart the indexer
+        let _ = indexer.run().await;
     });
 
     let router = Router {
