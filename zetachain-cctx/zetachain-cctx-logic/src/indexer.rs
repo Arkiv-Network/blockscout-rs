@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Ok;
 
+use tokio::join;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 use crate::models::{CrossChainTx, InboundParams, OutboundParams, PagedCCTXResponse, RevertOptions};
@@ -775,15 +776,18 @@ impl Indexer {
         });
 
         // Priority strategy:
-        // 1. Realtime fetch (highest priority - must run at configured frequency)
-        // 2. Gap fill (medium priority - if there's a gap, we're lagging behind)
-        // 3. Status update for new cctxs (medium priority)
-        // 4. Historical sync (lowest priority - can lag without affecting realtime)
+        // 1. Gap fill (medium priority - if there's a gap, we're lagging behind)
+        // 2. Status update for new cctxs (medium priority)
+        // 3. Historical sync (lowest priority - can lag without affecting realtime)
         let combined_stream =
             select_with_strategy(status_update_stream, historical_stream, prio_left);
         let combined_stream = select_with_strategy(gap_fill_stream, combined_stream, prio_left);
         
-        combined_stream
+
+        // Realtime data fetch must run at configured frequency, so we run it in parallel as a dedicated thread 
+        let realtime_handler = self.realtime_fetch_handler();
+        
+        let streaming = combined_stream
             .for_each_concurrent(Some(self.settings.concurrency as usize), |job| {
                 let client = self.client.clone();
                 let db = self.db.clone();
@@ -816,12 +820,9 @@ impl Indexer {
                     }
                 });
                 futures::future::ready(())
-            })
-            .await;
-
-        let realtime_handler = self.realtime_fetch_handler();
-        realtime_handler.await?;
-        Ok(())
+            });
+        join!(realtime_handler, streaming).0.map_err(anyhow::Error::from)
+        
     
     }
 }
