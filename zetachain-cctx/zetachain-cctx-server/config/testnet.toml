@@ -17,7 +17,10 @@ run_migrations = true
 
 [indexer]
 polling_interval = 1000
-concurrency=10
+concurrency=3
+historical_batch_size=3
+status_update_batch_size = 1
+realtime_fetch_batch_size = 1
 
 [rpc]
 url = "https://zetachain-athens.g.allthatnode.com/archive/rest/a0edcf7bca3748b0a115df6163411457/zeta-chain/"

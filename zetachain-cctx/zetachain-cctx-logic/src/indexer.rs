@@ -217,7 +217,7 @@ async fn historical_sync(
 async fn realtime_fetch(job_id: Uuid,db: &DatabaseConnection, client: &Client) -> anyhow::Result<()> {
     let response = client
         .list_cctx(None, false, 10, job_id)
-        .instrument(tracing::info_span!("requesting realtime cctxs", job_id = %job_id))
+        .instrument(tracing::info_span!("requesting realtime cctxs"))
         .await
         .unwrap();
     let txs = response.cross_chain_tx;
@@ -233,13 +233,13 @@ async fn realtime_fetch(job_id: Uuid,db: &DatabaseConnection, client: &Client) -
     let latest_loaded = cross_chain_tx::Entity::find()
         .filter(cross_chain_tx::Column::Index.eq(&latest_fetched.index))
         .one(db)
-        .instrument(tracing::info_span!("query latest cctx from db", job_id = %job_id))
+        .instrument(tracing::info_span!("query latest cctx from db"))
         .await
         .unwrap();
 
     //if latest fetched cctx is in the db that means that the upper boundary is already covered and there is no new cctxs to save
     if latest_loaded.is_some() {
-        tracing::debug!("latest cctx already exists");
+        tracing::info!("latest cctx already exists, skipping");
         return Ok(());
     }
     //now we need to check the lower boudary ( the earliest of the fetched cctxs)
@@ -247,14 +247,14 @@ async fn realtime_fetch(job_id: Uuid,db: &DatabaseConnection, client: &Client) -
     let earliest_loaded = cross_chain_tx::Entity::find()
         .filter(cross_chain_tx::Column::Index.eq(&earliest_fetched.index))
             .one(db)
-            .instrument(tracing::info_span!("query earliest cctx from db", job_id = %job_id))
+            .instrument(tracing::info_span!("query earliest cctx from db"))
             .await
             .unwrap();
     
     if earliest_loaded.is_none() {
             // the lower boundary is not covered, so there could be more transaction that happened earlier, that we haven't observed
             //we have to save current pointer to continue fetching until we hit a known transaction
-            tracing::info!("no last cctx found, creating new realtime watermark");
+            tracing::info!("earliest cctx not found, creating new realtime watermark");
             watermark::Entity::insert(watermark::ActiveModel {
                 id: ActiveValue::NotSet,
                 watermark_type: ActiveValue::Set(WatermarkType::Realtime),
@@ -264,7 +264,7 @@ async fn realtime_fetch(job_id: Uuid,db: &DatabaseConnection, client: &Client) -
                 updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
             })
             .exec(db)
-            .instrument(tracing::info_span!("creating new realtime watermark", job_id = %job_id))
+            .instrument(tracing::info_span!("creating new realtime watermark"))
             .await
             .unwrap();
     } 
@@ -446,23 +446,18 @@ async fn batch_insert_transactions<C: ConnectionTrait>(
     }
 
     // Batch insert parent records
-    let _cctx_results = cross_chain_tx::Entity::insert_many(cctx_models)
+    let inserted_cctxs = cross_chain_tx::Entity::insert_many(cctx_models)
         .on_conflict(
             sea_orm::sea_query::OnConflict::column(cross_chain_tx::Column::Index)
                 .do_nothing()
                 .to_owned(),
         )
-        .exec(db)
+        .exec_with_returning_many(db)
         .instrument(tracing::info_span!("inserting cctxs", job_id = %job_id))
         .await?;
 
-    // Get the inserted IDs - we need to query them since we can't get them from insert_many
-    let inserted_indices: Vec<String> = transactions.iter().map(|tx| tx.index.clone()).collect();
-    let inserted_cctxs = cross_chain_tx::Entity::find()
-        .filter(cross_chain_tx::Column::Index.is_in(inserted_indices))
-        .all(db)
-        .await?;
 
+    tracing::info!("inserted cctxs: {:?}", inserted_cctxs.len());
     // Create a map from index to id for quick lookup
     let index_to_id: std::collections::HashMap<String, i32> = inserted_cctxs
         .into_iter()
@@ -573,7 +568,7 @@ async fn batch_insert_transactions<C: ConnectionTrait>(
                 .to_owned(),
         )
         .exec(db)
-        .instrument(tracing::info_span!("inserting cctx_status", job_id = %job_id))
+        .instrument(tracing::info_span!("inserting cctx_status"))
         .await?;
     }
     
@@ -596,6 +591,7 @@ impl Indexer {
         }
     }
 
+    #[instrument(skip(self))]
     fn realtime_fetch_handler(&self) -> JoinHandle<()> {
         let db = self.db.clone();
         let polling_interval = self.settings.polling_interval;
@@ -603,7 +599,9 @@ impl Indexer {
         tokio::spawn(async move {
             loop {
                 let job_id = Uuid::new_v4();
+                println!("realtime fetch job_id: {}", job_id);
                 realtime_fetch(job_id, &db, &client)
+                .instrument(tracing::info_span!("realtime fetch", job_id = %job_id))
                 .await
                 .unwrap();
                 tokio::time::sleep(Duration::from_millis(polling_interval)).await;
@@ -611,8 +609,8 @@ impl Indexer {
         })
     }
 
-    
-    pub async fn run(&self) {
+    #[instrument(skip(self))]
+    pub async fn run(&self)-> anyhow::Result<()> {
         
         tracing::info!("initializing indexer");
         let db = self.db.clone();
@@ -624,8 +622,7 @@ impl Indexer {
         let historical_watermark = watermark::Entity::find()
         .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
         .one(db.as_ref())
-        .await
-        .unwrap();
+        .await?;
 
         tracing::info!("removing lock from cctxs");
         cross_chain_tx::Entity::update_many()
@@ -635,8 +632,7 @@ impl Indexer {
             ..Default::default()
         })
         .exec(db.as_ref())
-        .await
-        .unwrap();
+        .await?;
         
         if historical_watermark.is_none() {  
             tracing::info!("inserting historical watermark");
@@ -649,8 +645,7 @@ impl Indexer {
                 id: ActiveValue::NotSet,
             })
             .exec(db.as_ref())
-            .await
-            .unwrap();
+            .await?;
         } else {
             tracing::info!("historical watermark already exist, pointer: {}", historical_watermark.unwrap().pointer);
         }
@@ -661,8 +656,7 @@ impl Indexer {
             ..Default::default()
         })
         .exec(db.as_ref())
-        .await
-        .unwrap();
+        .await?;
 
         tracing::info!("setup completed, initializing streams");
         let status_update_batch_size = self.settings.status_update_batch_size;
@@ -687,24 +681,24 @@ impl Indexer {
                 "#
             );
 
-            println!("{statement}");
-
                 let statement = Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     statement,
                     vec![],
                 );
 
+                let job_id = Uuid::new_v4();
                 match cross_chain_tx::Entity::find()
                 .from_raw_sql(statement)
                 .all(db.as_ref())
+                .instrument(tracing::info_span!("fetching cctxs for status update", job_id = %job_id))
                 .await {
                     std::result::Result::Ok(cctxs) => {
                         if cctxs.is_empty() {
-                            tracing::info!("no cctxs to update");
+                            tracing::info!("job_id: {} no cctxs to update", job_id);
                         } else {
                         for cctx in cctxs {
-                            yield IndexerJob::StatusUpdate(cctx, Uuid::new_v4());
+                            yield IndexerJob::StatusUpdate(cctx, job_id);
                             }
                         }
                         
@@ -764,6 +758,7 @@ impl Indexer {
 
                     //TODO: add updated_by field to watermark model
                 if let Some(watermark) = watermarks {
+                    tracing::info!("job_id: {} historical watermark found", job_id);
                     let mut model: watermark::ActiveModel = watermark.clone().into();
                     model.id = ActiveValue::Unchanged(watermark.id); // Ensure primary key is set
                     model.lock = ActiveValue::Set(true);
@@ -825,6 +820,8 @@ impl Indexer {
             .await;
 
         let realtime_handler = self.realtime_fetch_handler();
-        realtime_handler.await.unwrap();
+        realtime_handler.await?;
+        Ok(())
+    
     }
 }
