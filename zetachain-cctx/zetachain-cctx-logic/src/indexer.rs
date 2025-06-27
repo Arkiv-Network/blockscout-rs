@@ -70,44 +70,7 @@ async fn gap_fill(
     Ok(())
 }
 
-#[instrument(skip(db), fields(watermark_id = %watermark.id))]
-pub async fn unlock_watermark(db: &DatabaseConnection, watermark: watermark::Model) -> anyhow::Result<()> {
-    let res = watermark::Entity::update(watermark::ActiveModel {
-        id: ActiveValue::Unchanged(watermark.id),
-        lock: ActiveValue::Set(false),
-        updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
-        ..Default::default()
-    })
-    .filter(watermark::Column::Id.eq(watermark.id))
-    .exec(db)
-    .instrument(tracing::info_span!("unlocking watermark", watermark_id = %watermark.id))
-    .await?;
 
-    tracing::info!("unlocked watermark: {:?}", res);
-    Ok(())
-}
-
-pub async fn lock_watermark(db: &DatabaseConnection, watermark: watermark::Model) -> anyhow::Result<()> {
-    watermark::Entity::update(watermark::ActiveModel {
-        id: ActiveValue::Unchanged(watermark.id),
-        lock: ActiveValue::Set(true),
-        ..Default::default()
-    }).filter(watermark::Column::Id.eq(watermark.id))
-    .exec(db)
-    .await?;
-    Ok(())
-}
-async fn unlock_cctx(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
-    cross_chain_tx::Entity::update(cross_chain_tx::ActiveModel {
-        id: ActiveValue::Unchanged(id),
-        lock: ActiveValue::Set(false),
-        ..Default::default()
-    })
-    .filter(cross_chain_tx::Column::Id.eq(id))
-    .exec(db)
-    .await?;
-    Ok(())
-}
 #[instrument(skip(database, client), fields(job_id = %job_id))]
 async fn historical_sync(
     database: Arc<ZetachainCctxDatabase>,
@@ -220,101 +183,23 @@ impl Indexer {
 
     #[instrument(skip(self))]
     pub async fn run(&self)-> anyhow::Result<()> {
-        
+
         tracing::info!("initializing indexer");
-        let db = self.db.clone();
-        // select cctxs where outbound_params.tx_finalization_status is not final
-        
-        tracing::info!("checking if historical watermark exists");
-
-        //insert historical watermarks if there are no watermarks for historical type
-        let historical_watermark = watermark::Entity::find()
-        .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
-        .one(db.as_ref())
-        .await?;
-
-        tracing::info!("removing lock from cctxs");
-        cross_chain_tx::Entity::update_many()
-        .filter(cross_chain_tx::Column::Lock.eq(true))
-        .set(cross_chain_tx::ActiveModel {
-            lock: ActiveValue::Set(false),
-            ..Default::default()
-        })
-        .exec(db.as_ref())
-        .await?;
-        
-        if historical_watermark.is_none() {  
-            tracing::info!("inserting historical watermark");
-            watermark::Entity::insert(watermark::ActiveModel {
-                watermark_type: ActiveValue::Set(WatermarkType::Historical),
-                lock: ActiveValue::Set(false),
-                pointer: ActiveValue::Set("MH==".to_string()), //0 in base64
-                created_at: ActiveValue::Set(Utc::now().naive_utc()),
-                updated_at: ActiveValue::Set(Utc::now().naive_utc()),
-                id: ActiveValue::NotSet,
-            })
-            .exec(db.as_ref())
-            .await?;
-        } else {
-            tracing::info!("historical watermark already exist, pointer: {}", historical_watermark.unwrap().pointer);
-        }
-        watermark::Entity::update_many()
-        .filter(watermark::Column::Lock.eq(true))
-        .set(watermark::ActiveModel {
-            lock: ActiveValue::Set(false),
-            ..Default::default()
-        })
-        .exec(db.as_ref())
-        .await?;
-
+    
+        self.database.setup_db().await?;
+    
         tracing::info!("setup completed, initializing streams");
         let status_update_batch_size = self.settings.status_update_batch_size;
         let status_update_stream = Box::pin(async_stream::stream! {
             loop {
 
-                let statement = format!(r#"
-                WITH cctxs AS (
-                    SELECT cctx.id, cctx.index, cctx.last_status_update_timestamp
-                    FROM cross_chain_tx cctx
-                    JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
-                    WHERE cs.status IN ('PendingInbound', 'PendingOutbound', 'PendingRevert')
-                    AND cctx.lock = false
-                    ORDER BY cctx.last_status_update_timestamp ASC
-                    LIMIT {status_update_batch_size}
-                    FOR UPDATE SKIP LOCKED
-                )
-                UPDATE cross_chain_tx cctx
-                SET lock = true, last_status_update_timestamp = NOW()
-                WHERE id IN (SELECT id FROM cctxs)
-                RETURNING id, index, last_status_update_timestamp, lock, creator, index, relayed_message, protocol_contract_version, zeta_fees
-                "#
-            );
-
-                let statement = Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    statement,
-                    vec![],
-                );
-
                 let job_id = Uuid::new_v4();
-                match cross_chain_tx::Entity::find()
-                .from_raw_sql(statement)
-                .all(db.as_ref())
-                .instrument(tracing::info_span!("fetching cctxs for status update", job_id = %job_id))
-                .await {
-                    std::result::Result::Ok(cctxs) => {
-                        if cctxs.is_empty() {
-                            tracing::info!("job_id: {} no cctxs to update", job_id);
-                        } else {
-                        for cctx in cctxs {
-                            yield IndexerJob::StatusUpdate(cctx, job_id);
-                            }
-                        }
-                        
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to fetch cctxs for status update");
-                    }
+                let cctxs = self.database.query_cctxs_for_status_update(status_update_batch_size, job_id).await.unwrap();
+                if cctxs.is_empty() {
+                    tracing::info!("job_id: {} no cctxs to update", job_id);
+                }
+                for cctx in cctxs {
+                    yield IndexerJob::StatusUpdate(cctx, job_id);
                 }
                 tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
                 
@@ -367,12 +252,7 @@ impl Indexer {
 
                     //TODO: add updated_by field to watermark model
                 if let Some(watermark) = watermarks {
-                    tracing::info!("job_id: {} historical watermark found", job_id);
-                    let mut model: watermark::ActiveModel = watermark.clone().into();
-                    model.id = ActiveValue::Unchanged(watermark.id); // Ensure primary key is set
-                    model.lock = ActiveValue::Set(true);
-                    model.updated_at = ActiveValue::Set(Utc::now().naive_utc());
-                    model.update(db.as_ref()).await.unwrap();
+                    self.database.lock_watermark(watermark.clone()).await.unwrap();
                     yield IndexerJob::HistoricalDataFetch(watermark, job_id);
                 } else {
                     tracing::info!("job_id: {} historical watermark is absent or locked", job_id);
@@ -408,7 +288,7 @@ impl Indexer {
                             if let Err(e) =    update_cctx_status(job_id, database.clone(), &client, existing_cctx)
                             .await {
                                 tracing::error!(error = %e, job_id = %job_id, "Failed to update cctx status");
-                                unlock_cctx(&db, cctx_id).await.unwrap();
+                                database.unlock_cctx(cctx_id).await.unwrap();
                             }
                         }
                         IndexerJob::GapFill(watermark, job_id) => {
@@ -416,13 +296,13 @@ impl Indexer {
                             .await {
                                 tracing::error!(error = %e, job_id = %job_id, "Failed to fetch gap fill data");
                             }
-                            unlock_watermark(&db, watermark).await.unwrap();
+                            database.unlock_watermark(watermark).await.unwrap();
                         }
                         IndexerJob::HistoricalDataFetch(watermark, job_id) => { 
                             if let Err(e) =historical_sync(database.clone(), &client, watermark.clone(), job_id, batch_size)
                             .await {
                                 tracing::error!(error = %e, job_id = %job_id, "Failed to fetch historical data");
-                                unlock_watermark(&db, watermark).await.unwrap();
+                                database.unlock_watermark(watermark).await.unwrap();
                             }
                             // unlock_watermark(&db, watermark).await.unwrap();
                         }

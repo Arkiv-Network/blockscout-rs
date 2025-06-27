@@ -43,6 +43,51 @@ impl ZetachainCctxDatabase {
         Self { db }
     }
 
+    pub async fn setup_db(&self) -> anyhow::Result<()> {
+        tracing::info!("checking if historical watermark exists");
+
+        //insert historical watermarks if there are no watermarks for historical type
+        let historical_watermark = watermark::Entity::find()
+        .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
+        .one(self.db.as_ref())
+        .await?;
+
+        tracing::info!("removing lock from cctxs");
+        CrossChainTxEntity::Entity::update_many()
+        .filter(CrossChainTxEntity::Column::Lock.eq(true))
+        .set(CrossChainTxEntity::ActiveModel {
+            lock: ActiveValue::Set(false),
+            ..Default::default()
+        })
+        .exec(self.db.as_ref())
+        .await?;
+        
+        if historical_watermark.is_none() {  
+            tracing::info!("inserting historical watermark");
+            watermark::Entity::insert(watermark::ActiveModel {
+                watermark_type: ActiveValue::Set(WatermarkType::Historical),
+                lock: ActiveValue::Set(false),
+                pointer: ActiveValue::Set("MH==".to_string()), //0 in base64
+                created_at: ActiveValue::Set(Utc::now().naive_utc()),
+                updated_at: ActiveValue::Set(Utc::now().naive_utc()),
+                id: ActiveValue::NotSet,
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        } else {
+            tracing::info!("historical watermark already exist, pointer: {}", historical_watermark.unwrap().pointer);
+        }
+        watermark::Entity::update_many()
+        .filter(watermark::Column::Lock.eq(true))
+        .set(watermark::ActiveModel {
+            lock: ActiveValue::Set(false),
+            ..Default::default()
+        })
+        .exec(self.db.as_ref())
+        .await?;
+
+        Ok(())
+    }
 
     pub async fn move_watermark(&self, watermark: watermark::Model,new_pointer: String) -> anyhow::Result<()> {
         
@@ -252,9 +297,51 @@ pub async fn batch_insert_transactions(
     Ok(())
 }
 
-    async fn query_cctxs_for_status_update(
+
+#[instrument(skip(self), fields(watermark_id = %watermark.id))]
+pub async fn unlock_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
+    let res = watermark::Entity::update(watermark::ActiveModel {
+        id: ActiveValue::Unchanged(watermark.id),
+        lock: ActiveValue::Set(false),
+        updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        ..Default::default()
+    })
+    .filter(watermark::Column::Id.eq(watermark.id))
+    .exec(self.db.as_ref())
+    .instrument(tracing::info_span!("unlocking watermark", watermark_id = %watermark.id))
+    .await?;
+
+    tracing::info!("unlocked watermark: {:?}", res);
+    Ok(())
+}
+
+pub async fn lock_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
+    watermark::Entity::update(watermark::ActiveModel {
+        id: ActiveValue::Unchanged(watermark.id),
+        lock: ActiveValue::Set(true),
+        ..Default::default()
+    }).filter(watermark::Column::Id.eq(watermark.id))
+    .exec(self.db.as_ref())
+    .await?;
+    Ok(())
+}
+
+pub async fn unlock_cctx(&self, id: i32) -> anyhow::Result<()> {
+    CrossChainTxEntity::Entity::update(CrossChainTxEntity::ActiveModel {
+        id: ActiveValue::Unchanged(id),
+        lock: ActiveValue::Set(false),
+        ..Default::default()
+    })
+    .filter(CrossChainTxEntity::Column::Id.eq(id))
+    .exec(self.db.as_ref())
+    .await?;
+    Ok(())
+}
+#[instrument(skip(self), fields(job_id = %job_id))]
+    pub async fn query_cctxs_for_status_update(
         &self,
         batch_size: u32,
+        job_id: Uuid
     ) -> anyhow::Result<Vec<CrossChainTxEntity::Model>> {
         let statement = format!(r#"
         WITH cctxs AS (
