@@ -12,7 +12,7 @@ use zetachain_cctx_entity::{
     cross_chain_tx, watermark, sea_orm_active_enums::WatermarkType,
 };
 use zetachain_cctx_logic::{
-    client::{Client, RpcSettings}, database::ZetachainCctxDatabase, indexer::{lock_watermark, unlock_watermark, Indexer}, settings::IndexerSettings
+    client::{Client, RpcSettings}, database::ZetachainCctxDatabase, indexer:: Indexer, settings::IndexerSettings
 };
 use crate::data::{FIRST_PAGE_RESPONSE, SECOND_PAGE_RESPONSE, THIRD_PAGE_RESPONSE, PENDING_TX_RESPONSE,FINALIZED_TX_RESPONSE};
 use sea_orm::PaginatorTrait;
@@ -145,12 +145,41 @@ async fn test_parse_historical_data() {
     let db = crate::helpers::init_db("test", "indexer_parse_historical_data").await;
     let mock_server = MockServer::start().await;
     let mock_response = data::historic_response_from_file();
+
+    watermark::Entity::delete_many()
+        .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
+        .exec(db.client().as_ref())
+        .await
+        .unwrap();
+
+    cross_chain_tx::Entity::delete_many()
+        .exec(db.client().as_ref())
+        .await
+        .unwrap();
+    
     Mock::given(method("GET"))
         .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "true"))
         .and(query_param("pagination.key", "MH=="))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             serde_json::from_str::<serde_json::Value>(&mock_response).unwrap()
+        ))
+        .mount(&mock_server)
+        .await;
+
+        let empty_response = serde_json::json!({
+            "CrossChainTx": [],
+            "pagination": {
+                "next_key": "////////22c=",
+                "total": "0"
+            }
+        });
+
+    Mock::given(method("GET"))
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "false"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::from_str::<serde_json::Value>(&empty_response.to_string()).unwrap()
         ))
         .mount(&mock_server)
         .await;
@@ -229,6 +258,7 @@ async fn test_parse_historical_data() {
 #[tokio::test]
 async fn test_lock_watermark() {
     let db = crate::helpers::init_db("test", "indexer_lock_watermark").await;
+    let database = ZetachainCctxDatabase::new(db.client().clone());
 
     watermark::Entity::insert(watermark::ActiveModel {
         id: ActiveValue::NotSet,
@@ -244,8 +274,8 @@ async fn test_lock_watermark() {
         .one(db.client().as_ref())
         .await
         .unwrap();
-    lock_watermark(db.client().as_ref(), watermark.clone().unwrap()).await.unwrap();
-    unlock_watermark(db.client().as_ref(), watermark.clone().unwrap()).await.unwrap();
+    database.lock_watermark(watermark.clone().unwrap()).await.unwrap();
+    database.unlock_watermark(watermark.clone().unwrap()).await.unwrap();
 
     let watermark = watermark::Entity::find()
         .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
