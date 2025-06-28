@@ -16,7 +16,7 @@ pub struct Model {
     pub error_message: Option<String>,
     pub last_update_timestamp: DateTime,
     pub is_abort_refunded: bool,
-    pub created_timestamp: Option<DateTime>,
+    pub created_timestamp: i64,
     #[sea_orm(column_type = "Text", nullable)]
     pub error_message_revert: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]

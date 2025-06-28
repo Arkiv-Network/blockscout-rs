@@ -205,7 +205,7 @@ pub async fn batch_insert_transactions(
                     .naive_utc(),
                 ),
                 is_abort_refunded: ActiveValue::Set(tx.cctx_status.is_abort_refunded),
-                created_timestamp: ActiveValue::Set(tx.cctx_status.created_timestamp.clone()),
+                created_timestamp: ActiveValue::Set(tx.cctx_status.created_timestamp.parse::<i64>()?),
                 error_message_revert: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message_revert.clone()))),
                 error_message_abort: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message_abort.clone()))),
             };
@@ -474,7 +474,7 @@ async fn insert_transaction(
             .naive_utc(),
         ),
         is_abort_refunded: ActiveValue::Set(tx.cctx_status.is_abort_refunded),
-        created_timestamp: ActiveValue::Set(tx.cctx_status.created_timestamp),
+        created_timestamp: ActiveValue::Set(tx.cctx_status.created_timestamp.parse::<i64>()?),
         error_message_revert: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message_revert))),
         error_message_abort: ActiveValue::Set(Some(sanitize_string(tx.cctx_status.error_message_abort))),
     };

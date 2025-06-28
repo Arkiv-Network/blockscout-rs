@@ -171,8 +171,8 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(CctxStatus::CreatedTimestamp)
-                            .date_time()
-                            .null(),
+                            .big_integer()
+                            .not_null(),
                     )
                     .col(ColumnDef::new(CctxStatus::ErrorMessageRevert).text().null())
                     .col(ColumnDef::new(CctxStatus::ErrorMessageAbort).text().null())

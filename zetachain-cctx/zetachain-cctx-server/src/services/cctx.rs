@@ -46,7 +46,7 @@ impl CctxInfoService for CctxService {
                     error_message: entity.status.error_message.unwrap_or_default(),
                     last_update_timestamp: entity.status.last_update_timestamp.and_utc().timestamp(),
                     is_abort_refunded: entity.status.is_abort_refunded,
-                    created_timestamp: entity.status.created_timestamp.unwrap_or_default().and_utc().timestamp(),
+                    created_timestamp: entity.status.created_timestamp,
                     error_message_abort: entity.status.error_message_abort.unwrap_or_default(),
                     error_message_revert: entity.status.error_message_revert.unwrap_or_default(),
                 }),
