@@ -6,7 +6,7 @@ use sea_orm::{ActiveValue, DatabaseConnection, DbBackend, Statement, Transaction
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use tracing::{instrument, Instrument};
 use uuid::Uuid;
-use zetachain_cctx_entity::sea_orm_active_enums::{CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, WatermarkType, ProtocolContractVersion};
+use zetachain_cctx_entity::sea_orm_active_enums::{CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, Kind, ProtocolContractVersion};
 use zetachain_cctx_entity::{cctx_status, inbound_params, revert_options, watermark};
 use zetachain_cctx_entity::{
     cross_chain_tx as CrossChainTxEntity, outbound_params as OutboundParamsEntity,
@@ -19,6 +19,8 @@ pub struct ZetachainCctxDatabase {
     db: Arc<DatabaseConnection>,
 }
 
+/// Sanitizes strings by removing null bytes and replacing invalid UTF-8 sequences
+/// PostgreSQL UTF-8 encoding doesn't allow null bytes (0x00)
 fn sanitize_string(input: String) -> String {
     // Remove null bytes and replace invalid UTF-8 sequences
     input
@@ -48,7 +50,7 @@ impl ZetachainCctxDatabase {
 
         //insert historical watermarks if there are no watermarks for historical type
         let historical_watermark = watermark::Entity::find()
-        .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
+        .filter(watermark::Column::Kind.eq(Kind::Historical))
         .one(self.db.as_ref())
         .await?;
 
@@ -65,7 +67,7 @@ impl ZetachainCctxDatabase {
         if historical_watermark.is_none() {  
             tracing::info!("inserting historical watermark");
             watermark::Entity::insert(watermark::ActiveModel {
-                watermark_type: ActiveValue::Set(WatermarkType::Historical),
+                kind: ActiveValue::Set(Kind::Historical),
                 lock: ActiveValue::Set(false),
                 pointer: ActiveValue::Set("MH==".to_string()), //0 in base64
                 created_at: ActiveValue::Set(Utc::now().naive_utc()),
@@ -118,7 +120,7 @@ Ok(())
     pub async fn create_realtime_watermark(&self, pointer: String) -> anyhow::Result<()> {
         watermark::Entity::insert(watermark::ActiveModel {
             id: ActiveValue::NotSet,
-            watermark_type: ActiveValue::Set(WatermarkType::Realtime),
+            kind: ActiveValue::Set(Kind::Realtime),
             pointer: ActiveValue::Set(pointer),
             lock: ActiveValue::Set(false),
             created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
@@ -131,8 +133,6 @@ Ok(())
         Ok(())
     }
 
-    /// Sanitizes strings by removing null bytes and replacing invalid UTF-8 sequences
-/// PostgreSQL UTF-8 encoding doesn't allow null bytes (0x00)
 
     /// Batch insert multiple CrossChainTx records with their child entities
 #[instrument(skip(self, transactions), fields(job_id = %job_id))]

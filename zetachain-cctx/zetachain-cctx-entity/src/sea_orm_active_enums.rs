@@ -53,6 +53,14 @@ pub enum InboundStatus {
     InvalidMemo,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "kind")]
+pub enum Kind {
+    #[sea_orm(string_value = "realtime")]
+    Realtime,
+    #[sea_orm(string_value = "historical")]
+    Historical,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(
     rs_type = "String",
     db_type = "Enum",
@@ -77,12 +85,4 @@ pub enum TxFinalizationStatus {
     Finalized,
     #[sea_orm(string_value = "Executed")]
     Executed,
-}
-#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "watermark_type")]
-pub enum WatermarkType {
-    #[sea_orm(string_value = "realtime")]
-    Realtime,
-    #[sea_orm(string_value = "historical")]
-    Historical,
 }

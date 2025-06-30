@@ -8,16 +8,15 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 use crate::database::ZetachainCctxDatabase;
 use crate::models::PagedCCTXResponse;
-use zetachain_cctx_entity::sea_orm_active_enums::{WatermarkType};
+use zetachain_cctx_entity::sea_orm_active_enums::{Kind};
 use zetachain_cctx_entity::{
     cross_chain_tx, watermark,
 };
 
-use sea_orm::{ColumnTrait, DbBackend, Statement};
+use sea_orm::ColumnTrait;
 
 use crate::{client::Client, settings::IndexerSettings};
 use chrono::Utc;
-use sea_orm::ActiveModelTrait;
 use futures::StreamExt;
 use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter};
 use tracing::{instrument, Instrument};
@@ -212,7 +211,7 @@ impl Indexer {
             loop {
 
                 let watermarks = watermark::Entity::find()
-                    .filter(watermark::Column::WatermarkType.eq(WatermarkType::Realtime))
+                    .filter(watermark::Column::Kind.eq(Kind::Realtime))
                     .filter(watermark::Column::Lock.eq(false))
                     .filter(watermark::Column::UpdatedAt.lt(Utc::now() - Duration::from_secs(10))) //TODO: make it configurable
                     .all(db.as_ref())
@@ -243,7 +242,7 @@ impl Indexer {
             loop {
                 let job_id = Uuid::new_v4();
                 let watermarks = watermark::Entity::find()
-                    .filter(watermark::Column::WatermarkType.eq(WatermarkType::Historical))
+                    .filter(watermark::Column::Kind.eq(Kind::Historical))
                     .filter(watermark::Column::Lock.eq(false))
                     .one(db.as_ref())
                     .instrument(tracing::info_span!("looking for historical watermark",job_id = %job_id))
@@ -278,7 +277,6 @@ impl Indexer {
         let streaming = combined_stream
             .for_each_concurrent(Some(self.settings.concurrency as usize), |job| {
                 let client = self.client.clone();
-                let db = self.db.clone();
                 let database = self.database.clone();
                 let batch_size = self.settings.historical_batch_size;
                 tokio::spawn(async move {

@@ -80,7 +80,7 @@ impl Client {
     pub async fn get_cctx(&self, index: &str) -> anyhow::Result<CrossChainTx> {
         let mut url: Url = self.settings.url.parse().unwrap();
         url.set_path("/crosschain/cctx");
-        url.set_fragment(Some(&index));
+        url.set_fragment(Some(index));
         let request = Request::new(Method::GET, url);
         let response = self.make_request(request).await?.error_for_status()?;
         let body = response.json::<CCTXResponse>().await?;
@@ -105,7 +105,7 @@ impl Client {
 
         if let Some(pagination_key) = pagination_key {
             url.query_pairs_mut()
-                .append_pair("pagination.key", &pagination_key);
+                .append_pair("pagination.key", pagination_key);
         }
 
         let request = Request::new(Method::GET, url.clone());

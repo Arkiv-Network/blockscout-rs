@@ -1,4 +1,4 @@
-use crate::sea_orm_active_enums::{CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, ProtocolContractVersion, TxFinalizationStatus, WatermarkType};
+use crate::sea_orm_active_enums::{CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, ProtocolContractVersion, TxFinalizationStatus, Kind};
 
 impl TryFrom<String> for TxFinalizationStatus {
     type Error = String;
@@ -13,14 +13,14 @@ impl TryFrom<String> for TxFinalizationStatus {
     }
 }
 
-impl TryFrom<String> for WatermarkType {
+impl TryFrom<String> for Kind {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         match value.as_str() {
-            "realtime" => Ok(WatermarkType::Realtime),
-            "historical" => Ok(WatermarkType::Historical),
-            _ => Err(format!("Invalid WatermarkType: {}", value)),
+            "realtime" => Ok(Kind::Realtime),
+            "historical" => Ok(Kind::Historical),
+            _ => Err(format!("Invalid Kind: {}", value)),
         }
     }
 } 

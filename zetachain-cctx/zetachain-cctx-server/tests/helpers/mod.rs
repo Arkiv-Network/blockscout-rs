@@ -2,41 +2,21 @@ use std::sync::Arc;
 
 use blockscout_service_launcher::{
     test_database::TestDbGuard,
-    test_server,
-    tracing::{TracingSettings, JaegerSettings}
+    test_server
 };
 use reqwest::Url;
 use sea_orm::DatabaseConnection;
 use zetachain_cctx_logic::client::Client;
 use zetachain_cctx_server::Settings;
 
-/// Initialize tracing for tests
-pub fn init_tracing() {
-    use std::sync::Once;
-    static INIT: Once = Once::new();
-    
-    INIT.call_once(|| {
-        let mut tracing_settings = TracingSettings::default();
-        tracing_settings.enabled = true;
-        
-        let jaeger_settings = JaegerSettings::default();
-        
-        let _ = blockscout_service_launcher::tracing::init_logs(
-            "zetachain_cctx_test",
-            &tracing_settings,
-            &jaeger_settings
-        );
-    });
-}
-
+#[allow(dead_code)]
 pub async fn init_db(db_prefix: &str, test_name: &str) -> TestDbGuard {
-    // Initialize tracing for all tests that use this helper
-    init_tracing();
-    
+    // Initialize tracing for all tests that use this helper    
     let db_name = format!("{db_prefix}_{test_name}");
     TestDbGuard::new::<migration::Migrator>(db_name.as_str()).await
 }
 
+#[allow(dead_code)]
 pub async fn init_zetachain_cctx_server<F>(
     db_url: String,
     settings_setup: F,
@@ -47,7 +27,7 @@ where
     F: Fn(Settings) -> Settings,
 {
     // Initialize tracing for server tests
-    init_tracing();
+    // init_tracing();
     
     let (settings, base) = {
         let mut settings = Settings::default(

@@ -13,8 +13,8 @@ impl MigrationTrait for Migration {
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tx_finalization_status') THEN
                     CREATE TYPE tx_finalization_status AS ENUM ('NotFinalized', 'Finalized', 'Executed');
                 END IF;
-                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'watermark_type') THEN
-                    CREATE TYPE watermark_type AS ENUM ('realtime', 'historical');
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'kind') THEN
+                    CREATE TYPE kind AS ENUM ('realtime', 'historical');
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'cctx_status_status') THEN
                     CREATE TYPE cctx_status_status AS ENUM ('PendingInbound', 'PendingOutbound', 'PendingRevert', 'Aborted', 'Reverted', 'OutboundMined');
@@ -48,8 +48,8 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(
-                        ColumnDef::new(Watermark::WatermarkType)
-                            .enumeration("watermark_type", ["realtime", "historical"])
+                        ColumnDef::new(Watermark::Kind)
+                            .enumeration("kind", ["realtime", "historical"])
                             .not_null(),
                     )
                     .col(ColumnDef::new(Watermark::Pointer).string().not_null())
@@ -453,7 +453,7 @@ impl MigrationTrait for Migration {
 enum Watermark {
     Table,
     Id,
-    WatermarkType,
+    Kind,
     Pointer,
     Lock,
     CreatedAt,
