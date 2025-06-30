@@ -17,7 +17,7 @@ paths:
         "200":
           description: A successful response.
           schema:
-            $ref: '#/definitions/v1GetCctxInfoResponse'
+            $ref: '#/definitions/v1CrossChainTx'
         default:
           description: An unexpected error response.
           schema:
@@ -153,11 +153,6 @@ definitions:
         $ref: '#/definitions/v1ProtocolContractVersion'
       revert_options:
         $ref: '#/definitions/v1RevertOptions'
-  v1GetCctxInfoResponse:
-    type: object
-    properties:
-      cctx:
-        $ref: '#/definitions/v1CrossChainTx'
   v1HealthCheckResponse:
     type: object
     properties:

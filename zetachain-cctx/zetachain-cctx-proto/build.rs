@@ -18,10 +18,19 @@ fn compile(
         .bytes(["."])
         .btree_map(["."])
         .type_attribute(".", "#[actix_prost_macros::serde(rename_all=\"snake_case\")]")
-        // .field_attribute(
-        //     ".blockscout.zetachainCctx.v1.<MessageName>.<DefaultFieldName>",
-        //     "#[serde(default)]"
-        // )
+        // Override enum renaming for specific enums that need to preserve original names
+        .type_attribute(
+            ".blockscout.zetachainCctx.v1.CoinType",
+            "#[actix_prost_macros::serde(rename_all=\"PascalCase\")]"
+        )
+        .type_attribute(
+            ".blockscout.zetachainCctx.v1.ConfirmationMode",
+            "#[actix_prost_macros::serde(rename_all=\"UPPERCASE\")]"
+        )
+        .type_attribute(
+            ".blockscout.zetachainCctx.v1.InboundStatus",
+            "#[actix_prost_macros::serde(rename_all=\"UPPERCASE\")]"
+        )
         ;
     config.compile_protos(protos, includes)?;
     Ok(())

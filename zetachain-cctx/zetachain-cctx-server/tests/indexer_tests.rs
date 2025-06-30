@@ -3,7 +3,7 @@ use std::time::Duration;
 mod helpers;
 
 use blockscout_service_launcher::test_server::{self};
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Utc};
 use pretty_assertions::assert_eq;
 use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter};
 use sea_orm::{ConnectionTrait, PaginatorTrait};
@@ -16,13 +16,14 @@ use zetachain_cctx_entity::cctx_status::{Column as CctxStatusColumn, Entity as C
 use zetachain_cctx_entity::sea_orm_active_enums::CctxStatusStatus::OutboundMined;
 use zetachain_cctx_entity::sea_orm_active_enums::{CoinType, ProtocolContractVersion};
 use zetachain_cctx_entity::{cross_chain_tx, sea_orm_active_enums::Kind, watermark};
-use zetachain_cctx_logic::models::CrossChainTx;
+
 use zetachain_cctx_logic::{
     client::{Client, RpcSettings},
     database::ZetachainCctxDatabase,
     indexer::Indexer,
     settings::IndexerSettings,
 };
+use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::CrossChainTx;
 
 #[tokio::test]
 async fn test_historical_sync_updates_pointer() {
@@ -362,24 +363,24 @@ async fn test_lock_watermark() {
 #[tokio::test]
 async fn test_get_cctx_info() {
     let db = crate::helpers::init_db("test", "indexer_get_cctx_info").await;
-
-    let insert_statement = r#"
+    let last_update_timestamp= chrono::DateTime::<Utc>::from_timestamp(1750344684 as i64, 0).unwrap();
+    let insert_statement = format!(r#"
     INSERT INTO cross_chain_tx (id, creator, index, zeta_fees, lock, relayed_message, last_status_update_timestamp, protocol_contract_version) 
     VALUES (1, 'zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm', '0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31', '0', false, '', '2025-01-19 12:31:24', 'V2');
     INSERT INTO cctx_status (id, cross_chain_tx_id, status, status_message, error_message, last_update_timestamp, is_abort_refunded, created_timestamp, error_message_revert, error_message_abort) 
-    VALUES (1, 1, 'OutboundMined', '', '', '2025-01-19 12:31:24', false, 1750344684, '', '');
+    VALUES (1, 1, 'OutboundMined', '', '', '{}', false, 1750344684, '', '');
     INSERT INTO inbound_params (id, cross_chain_tx_id, sender, sender_chain_id, tx_origin, coin_type, asset, amount, observed_hash, observed_external_height, ballot_index, finalized_zeta_height, tx_finalization_status, is_cross_chain_call, status, confirmation_mode) 
     VALUES (1, 1, 'tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67', '18333', 'tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67', 'Gas', '', '8504', 'ed64294c274f4c8204f9c8e8495495b839c59d3944bfcf51ec8ad6d3d5721e38', '257082', '0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31', '10966764', 'Executed', false, 'SUCCESS', 'SAFE');
     INSERT INTO outbound_params (id, cross_chain_tx_id, receiver, receiver_chain_id, coin_type, amount, tss_nonce, gas_limit, gas_price, gas_priority_fee, hash, ballot_index, observed_external_height, gas_used, effective_gas_price, effective_gas_limit, tss_pubkey, tx_finalization_status, call_options_gas_limit, call_options_is_arbitrary_call, confirmation_mode) 
     VALUES (1, 1, '0x33c2f2B93798629f1311cA9ade3D4BF732011718', '7001', 'Gas', '0', '0', '0', '', '', '0xcd6c1391ca9950bb527b36b21ac75bccd29e7a2adf105662cb5eadd4bda5b4d5', '', '10966764', '0', '0', '0', 'zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p', 'Executed', '0', false, 'SAFE');
     INSERT INTO revert_options (id, cross_chain_tx_id, revert_address, call_on_revert, abort_address, revert_message, revert_gas_limit) 
     VALUES (1, 1, '', false, '', NULL, '0');
-    "#;
+    "#, last_update_timestamp.naive_utc().to_string());
 
     // let insert_statement = Statement::from_string(db.client().as_ref().get_database_backend(), insert_statement);
 
     db.client()
-        .execute_unprepared(insert_statement)
+        .execute_unprepared(&insert_statement)
         .await
         .unwrap();
 
@@ -435,11 +436,11 @@ async fn test_get_cctx_info() {
         "zeta_fees": "0",
         "relayed_message": "",
         "cctx_status": {
-            "status": "OutboundMined",
+            "status": "OUTBOUND_MINED",
             "status_message": "",
             "error_message": "",
-            "lastUpdate_timestamp": "1750344684",
-            "isAbortRefunded": false,
+            "last_update_timestamp": "1750344684",
+            "is_abort_refunded": false,
             "created_timestamp": "1750344684",
             "error_message_revert": "",
             "error_message_abort": ""
@@ -448,14 +449,14 @@ async fn test_get_cctx_info() {
             "sender": "tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67",
             "sender_chain_id": "18333",
             "tx_origin": "tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67",
-            "coin_type": "Gas",
+            "coin_type": "GAS",
             "asset": "",
             "amount": "8504",
             "observed_hash": "ed64294c274f4c8204f9c8e8495495b839c59d3944bfcf51ec8ad6d3d5721e38",
             "observed_external_height": "257082",
             "ballot_index": "0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31",
             "finalized_zeta_height": "10966764",
-            "tx_finalization_status": "Executed",
+            "tx_finalization_status": "EXECUTED",
             "is_cross_chain_call": false,
             "status": "SUCCESS",
             "confirmation_mode": "SAFE"
@@ -463,8 +464,8 @@ async fn test_get_cctx_info() {
         "outbound_params": [
             {
                 "receiver": "0x33c2f2B93798629f1311cA9ade3D4BF732011718",
-                "receiver_chainId": "7001",
-                "coin_type": "Gas",
+                "receiver_chain_id": "7001",
+                "coin_type": "GAS",
                 "amount": "0",
                 "tss_nonce": "0",
                 "gas_limit": "0",
@@ -477,7 +478,7 @@ async fn test_get_cctx_info() {
                 "effective_gas_price": "0",
                 "effective_gas_limit": "0",
                 "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
-                "tx_finalization_status": "Executed",
+                "tx_finalization_status": "EXECUTED",
                 "call_options": {
                     "gas_limit": "0",
                     "is_arbitrary_call": false
@@ -490,7 +491,7 @@ async fn test_get_cctx_info() {
             "revert_address": "",
             "call_on_revert": false,
             "abort_address": "",
-            "revert_message": null,
+            "revert_message": "",
             "revert_gas_limit": "0"
         }
     });
@@ -503,12 +504,15 @@ async fn test_get_cctx_info() {
     assert_eq!(parsed_cctx.creator, expected_cctx.creator);
     assert_eq!(parsed_cctx.zeta_fees, expected_cctx.zeta_fees);
     assert_eq!(parsed_cctx.relayed_message, expected_cctx.relayed_message);
-    assert_eq!(parsed_cctx.cctx_status.status, expected_cctx.cctx_status.status);
-    assert_eq!(parsed_cctx.cctx_status.status_message, expected_cctx.cctx_status.status_message);
-    assert_eq!(parsed_cctx.cctx_status.error_message, expected_cctx.cctx_status.error_message);
-    assert_eq!(parsed_cctx.cctx_status.last_update_timestamp, expected_cctx.cctx_status.last_update_timestamp);
-    assert_eq!(parsed_cctx.cctx_status.is_abort_refunded, expected_cctx.cctx_status.is_abort_refunded);
-    assert_eq!(parsed_cctx.cctx_status.created_timestamp, expected_cctx.cctx_status.created_timestamp);
+    assert!(parsed_cctx.cctx_status.is_some());
+    let expected_cctx_status = expected_cctx.cctx_status.unwrap();
+    let parsed_cctx_status = parsed_cctx.cctx_status.unwrap();
+    assert_eq!(parsed_cctx_status.status, expected_cctx_status.status);
+    assert_eq!(parsed_cctx_status.status_message, expected_cctx_status.status_message);
+    assert_eq!(parsed_cctx_status.error_message, expected_cctx_status.error_message);
+    assert_eq!(parsed_cctx_status.last_update_timestamp, expected_cctx_status.last_update_timestamp);
+    assert_eq!(parsed_cctx_status.is_abort_refunded, expected_cctx_status.is_abort_refunded);
+    assert_eq!(parsed_cctx_status.created_timestamp, expected_cctx_status.created_timestamp);
     
     
 }
