@@ -98,6 +98,6 @@ pub struct RevertOptions {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Pagination {
-    pub next_key: String,
+    pub next_key: Option<String>,
     pub total: String,
 }

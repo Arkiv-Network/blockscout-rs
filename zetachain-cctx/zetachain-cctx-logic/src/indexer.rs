@@ -65,7 +65,8 @@ async fn gap_fill(
     if last_synced_cctx.is_none() {
         database.batch_insert_transactions(job_id, &cctxs).await?;    
     }
-    database.move_watermark(watermark, pagination.next_key).await?;
+    let next_key = pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
+    database.move_watermark(watermark, next_key).await?;
     Ok(())
 }
 
@@ -83,7 +84,7 @@ async fn historical_sync(
         .instrument( tracing::debug_span!("fetching historical data from node", job_id = %job_id))
         .await?;
     let cross_chain_txs = response.cross_chain_tx;
-    let pagination = response.pagination;
+    let next_key = response.pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
     //atomically insert cctxs and update watermark
 
     if let Err(e) = database.batch_insert_transactions(job_id, &cross_chain_txs).await {
@@ -91,7 +92,7 @@ async fn historical_sync(
         tracing::error!("cross_chain_txs: {:?}", cross_chain_txs);
         return Err(e);
     }
-    database.move_watermark(watermark, pagination.next_key).await?;
+    database.move_watermark(watermark, next_key).await?;
     Ok(())
 }
 
@@ -109,7 +110,7 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
         tracing::debug!("No new cctxs found");
         return Ok(());
     }
-    let next_key = response.pagination.next_key;
+    let next_key = response.pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
 
     //check whether the latest fetched cctx is present in the database
     //we fetch transaction in LIFO order
