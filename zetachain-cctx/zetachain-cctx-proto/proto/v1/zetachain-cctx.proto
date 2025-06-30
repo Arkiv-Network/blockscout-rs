@@ -6,16 +6,12 @@ option go_package = "github.com/blockscout/blockscout-rs/zetachain-cctx";
 
 
 service CctxInfoService {
-  rpc GetCctxInfo(GetCctxInfoRequest) returns (GetCctxInfoResponse) {}
+  rpc GetCctxInfo(GetCctxInfoRequest) returns (CrossChainTx) {}
   
 }
 
 message GetCctxInfoRequest {
   string cctx_id = 1;
-}
-
-message GetCctxInfoResponse {
-  CrossChainTx cctx = 1;
 }
 
 

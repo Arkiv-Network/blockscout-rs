@@ -50,7 +50,7 @@ async fn update_cctx_status(
     Ok(())
 }
 
-#[instrument(skip(database, client), fields(job_id = %job_id))]
+#[instrument(,level="debug",skip(database, client), fields(job_id = %job_id))]
 async fn gap_fill(
     job_id: Uuid,
     database: Arc<ZetachainCctxDatabase>,
@@ -70,7 +70,7 @@ async fn gap_fill(
 }
 
 
-#[instrument(skip(database, client), fields(job_id = %job_id))]
+#[instrument(,level="debug",skip(database, client), fields(job_id = %job_id))]
 async fn historical_sync(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -80,7 +80,7 @@ async fn historical_sync(
 ) -> anyhow::Result<()> {
     let response = client
         .list_cctx(Some(&watermark.pointer), true, batch_size,job_id)
-        .instrument( tracing::info_span!("fetching historical data from node", job_id = %job_id))
+        .instrument( tracing::debug_span!("fetching historical data from node", job_id = %job_id))
         .await?;
     let cross_chain_txs = response.cross_chain_tx;
     let pagination = response.pagination;
@@ -97,16 +97,16 @@ async fn historical_sync(
 
 
 
-#[instrument(skip(database, client), fields(job_id = %job_id))]
+#[instrument(,level="debug",skip(database, client), fields(job_id = %job_id))]
 async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, client: &Client) -> anyhow::Result<()> {
     let response = client
         .list_cctx(None, false, 10, job_id)
-        .instrument(tracing::info_span!("requesting realtime cctxs"))
+        .instrument(tracing::debug_span!("requesting realtime cctxs"))
         .await
         .unwrap();
     let txs = response.cross_chain_tx;
     if txs.is_empty() {
-        tracing::info!("No new cctxs found");
+        tracing::debug!("No new cctxs found");
         return Ok(());
     }
     let next_key = response.pagination.next_key;
@@ -119,7 +119,7 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
 
     //if latest fetched cctx is in the db that means that the upper boundary is already covered and there is no new cctxs to save
     if latest_loaded.is_some() {
-        tracing::info!("latest cctx already exists, skipping");
+        tracing::debug!("latest cctx already exists, skipping");
         return Ok(());
     }
     //now we need to check the lower boudary ( the earliest of the fetched cctxs)
@@ -129,7 +129,7 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
     if earliest_loaded.is_none() {
             // the lower boundary is not covered, so there could be more transaction that happened earlier, that we haven't observed
             //we have to save current pointer to continue fetching until we hit a known transaction
-            tracing::info!("earliest cctx not found, creating new realtime watermark");
+            tracing::debug!("earliest cctx not found, creating new realtime watermark");
             database.create_realtime_watermark(next_key).await?;
     } 
 
@@ -160,7 +160,7 @@ impl Indexer {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(,level="debug",skip(self))]
     fn realtime_fetch_handler(&self) -> JoinHandle<()> {
         
         let polling_interval = self.settings.polling_interval;
@@ -170,9 +170,8 @@ impl Indexer {
             
             loop {
                 let job_id = Uuid::new_v4();
-                println!("realtime fetch job_id: {}", job_id);
                 realtime_fetch(job_id, database.clone(), &client)
-                .instrument(tracing::info_span!("realtime fetch", job_id = %job_id))
+                .instrument(tracing::debug_span!("realtime fetch", job_id = %job_id))
                 .await
                 .unwrap();
                 tokio::time::sleep(Duration::from_millis(polling_interval)).await;
@@ -180,14 +179,14 @@ impl Indexer {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(,level="debug",skip(self))]
     pub async fn run(&self)-> anyhow::Result<()> {
 
-        tracing::info!("initializing indexer");
+        tracing::debug!("initializing indexer");
     
         self.database.setup_db().await?;
     
-        tracing::info!("setup completed, initializing streams");
+        tracing::debug!("setup completed, initializing streams");
         let status_update_batch_size = self.settings.status_update_batch_size;
         let status_update_stream = Box::pin(async_stream::stream! {
             loop {
@@ -195,7 +194,7 @@ impl Indexer {
                 let job_id = Uuid::new_v4();
                 let cctxs = self.database.query_cctxs_for_status_update(status_update_batch_size, job_id).await.unwrap();
                 if cctxs.is_empty() {
-                    tracing::info!("job_id: {} no cctxs to update", job_id);
+                    tracing::debug!("job_id: {} no cctxs to update", job_id);
                 }
                 for cctx in cctxs {
                     yield IndexerJob::StatusUpdate(cctx, job_id);
@@ -245,7 +244,7 @@ impl Indexer {
                     .filter(watermark::Column::Kind.eq(Kind::Historical))
                     .filter(watermark::Column::Lock.eq(false))
                     .one(db.as_ref())
-                    .instrument(tracing::info_span!("looking for historical watermark",job_id = %job_id))
+                    .instrument(tracing::debug_span!("looking for historical watermark",job_id = %job_id))
                     .await
                     .unwrap();
 
@@ -254,7 +253,7 @@ impl Indexer {
                     self.database.lock_watermark(watermark.clone()).await.unwrap();
                     yield IndexerJob::HistoricalDataFetch(watermark, job_id);
                 } else {
-                    tracing::info!("job_id: {} historical watermark is absent or locked", job_id);
+                    tracing::debug!("job_id: {} historical watermark is absent or locked", job_id);
                 }
                 
 

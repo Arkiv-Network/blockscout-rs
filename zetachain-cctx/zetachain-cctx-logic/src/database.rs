@@ -46,7 +46,7 @@ impl ZetachainCctxDatabase {
     }
 
     pub async fn setup_db(&self) -> anyhow::Result<()> {
-        tracing::info!("checking if historical watermark exists");
+        tracing::debug!("checking if historical watermark exists");
 
         //insert historical watermarks if there are no watermarks for historical type
         let historical_watermark = watermark::Entity::find()
@@ -54,7 +54,7 @@ impl ZetachainCctxDatabase {
         .one(self.db.as_ref())
         .await?;
 
-        tracing::info!("removing lock from cctxs");
+        tracing::debug!("removing lock from cctxs");
         CrossChainTxEntity::Entity::update_many()
         .filter(CrossChainTxEntity::Column::Lock.eq(true))
         .set(CrossChainTxEntity::ActiveModel {
@@ -65,7 +65,7 @@ impl ZetachainCctxDatabase {
         .await?;
         
         if historical_watermark.is_none() {  
-            tracing::info!("inserting historical watermark");
+            tracing::debug!("inserting historical watermark");
             watermark::Entity::insert(watermark::ActiveModel {
                 kind: ActiveValue::Set(Kind::Historical),
                 lock: ActiveValue::Set(false),
@@ -77,7 +77,7 @@ impl ZetachainCctxDatabase {
             .exec(self.db.as_ref())
             .await?;
         } else {
-            tracing::info!("historical watermark already exist, pointer: {}", historical_watermark.unwrap().pointer);
+            tracing::debug!("historical watermark already exist, pointer: {}", historical_watermark.unwrap().pointer);
         }
         watermark::Entity::update_many()
         .filter(watermark::Column::Lock.eq(true))
@@ -127,7 +127,7 @@ Ok(())
             updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         })
         .exec(self.db.as_ref())
-        .instrument(tracing::info_span!("creating new realtime watermark"))
+        .instrument(tracing::debug_span!("creating new realtime watermark"))
         .await.map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(())
@@ -135,7 +135,7 @@ Ok(())
 
 
     /// Batch insert multiple CrossChainTx records with their child entities
-#[instrument(skip(self, transactions), fields(job_id = %job_id))]
+#[instrument(,level="debug",skip(self, transactions), fields(job_id = %job_id))]
 pub async fn batch_insert_transactions(
     &self,
     job_id: Uuid,
@@ -175,11 +175,11 @@ pub async fn batch_insert_transactions(
                 .to_owned(),
         )
         .exec_with_returning_many(self.db.as_ref())
-        .instrument(tracing::info_span!("inserting cctxs", job_id = %job_id))
+        .instrument(tracing::debug_span!("inserting cctxs", job_id = %job_id))
         .await?;
 
 
-    tracing::info!("inserted cctxs: {:?}", inserted_cctxs.len());
+    tracing::debug!("inserted cctxs: {:?}", inserted_cctxs.len());
     // Create a map from index to id for quick lookup
     let index_to_id: std::collections::HashMap<String, i32> = inserted_cctxs
         .into_iter()
@@ -290,7 +290,7 @@ pub async fn batch_insert_transactions(
                 .to_owned(),
         )
         .exec(self.db.as_ref())
-        .instrument(tracing::info_span!("inserting cctx_status"))
+        .instrument(tracing::debug_span!("inserting cctx_status"))
         .await?;
     }
     
@@ -298,7 +298,7 @@ pub async fn batch_insert_transactions(
 }
 
 
-#[instrument(skip(self), fields(watermark_id = %watermark.id))]
+#[instrument(,level="debug",skip(self), fields(watermark_id = %watermark.id))]
 pub async fn unlock_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
     let res = watermark::Entity::update(watermark::ActiveModel {
         id: ActiveValue::Unchanged(watermark.id),
@@ -308,10 +308,10 @@ pub async fn unlock_watermark(&self, watermark: watermark::Model) -> anyhow::Res
     })
     .filter(watermark::Column::Id.eq(watermark.id))
     .exec(self.db.as_ref())
-    .instrument(tracing::info_span!("unlocking watermark", watermark_id = %watermark.id))
+    .instrument(tracing::debug_span!("unlocking watermark", watermark_id = %watermark.id))
     .await?;
 
-    tracing::info!("unlocked watermark: {:?}", res);
+    tracing::debug!("unlocked watermark: {:?}", res);
     Ok(())
 }
 
@@ -337,7 +337,7 @@ pub async fn unlock_cctx(&self, id: i32) -> anyhow::Result<()> {
     .await?;
     Ok(())
 }
-#[instrument(skip(self), fields(job_id = %job_id))]
+#[instrument(,level="debug",skip(self), fields(job_id = %job_id))]
     pub async fn query_cctxs_for_status_update(
         &self,
         batch_size: u32,
@@ -375,7 +375,7 @@ pub async fn unlock_cctx(&self, id: i32) -> anyhow::Result<()> {
         
     }
 
-    #[instrument(skip(self), fields(job_id = %job_id))]
+    #[instrument(,level="debug",skip(self), fields(job_id = %job_id))]
     pub async fn update_cctx_status(
         &self,
         job_id: Uuid, 
@@ -425,7 +425,7 @@ pub async fn unlock_cctx(&self, id: i32) -> anyhow::Result<()> {
 
         Ok(())
     }
-    #[instrument(skip(self, tx), fields(tx_index = %tx.index, job_id = %job_id))]
+    #[instrument(,level="debug",skip(self, tx), fields(tx_index = %tx.index, job_id = %job_id))]
 async fn insert_transaction(
     &self,
     tx: CrossChainTx,
@@ -451,7 +451,7 @@ async fn insert_transaction(
                 .to_owned(),
         )
         .exec(self.db.as_ref())
-        .instrument(tracing::info_span!("inserting cctx", index = %index, job_id = %job_id))
+        .instrument(tracing::debug_span!("inserting cctx", index = %index, job_id = %job_id))
         .await?;
 
     // Get the inserted tx id
@@ -480,7 +480,7 @@ async fn insert_transaction(
     };
     cctx_status::Entity::insert(status_model)
         .exec(self.db.as_ref())
-        .instrument(tracing::info_span!("inserting cctx_status", index = %index, job_id = %job_id))
+        .instrument(tracing::debug_span!("inserting cctx_status", index = %index, job_id = %job_id))
         .await?;
 
     // Insert inbound_params
@@ -507,7 +507,7 @@ async fn insert_transaction(
     };
     inbound_params::Entity::insert(inbound_model)
         .exec(self.db.as_ref())
-        .instrument(tracing::info_span!("inserting inbound_params", index = %index, job_id = %job_id))
+        .instrument(tracing::debug_span!("inserting inbound_params", index = %index, job_id = %job_id))
         .await?;
 
     // Insert outbound_params
@@ -542,7 +542,7 @@ async fn insert_transaction(
         };
         OutboundParamsEntity::Entity::insert(outbound_model)
             .exec(self.db.as_ref())
-            .instrument(tracing::info_span!("inserting outbound_params", index = %index, job_id = %job_id))
+            .instrument(tracing::debug_span!("inserting outbound_params", index = %index, job_id = %job_id))
             .await?;
     }
 
@@ -558,7 +558,7 @@ async fn insert_transaction(
     };
     revert_options::Entity::insert(revert_model)
         .exec(self.db.as_ref())
-        .instrument(tracing::info_span!("inserting revert_options", index = %index, job_id = %job_id))
+        .instrument(tracing::debug_span!("inserting revert_options", index = %index, job_id = %job_id))
         .await?;
 
     Ok(())

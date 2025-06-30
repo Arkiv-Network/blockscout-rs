@@ -4,7 +4,7 @@ use tonic::{Request, Response, Status};
 
 use zetachain_cctx_logic::database::ZetachainCctxDatabase;
 use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::{
-    cctx_info_service_server::CctxInfoService, CallOptions, CrossChainTx, GetCctxInfoRequest, GetCctxInfoResponse, InboundParams, OutboundParams, RevertOptions, Status as CCTXStatus
+    cctx_info_service_server::CctxInfoService, CallOptions, CrossChainTx, GetCctxInfoRequest, InboundParams, OutboundParams, RevertOptions, Status as CCTXStatus
 };
 
 
@@ -22,7 +22,7 @@ impl CctxService {
 
 #[async_trait::async_trait]
 impl CctxInfoService for CctxService {
-    async fn get_cctx_info(&self, request: Request<GetCctxInfoRequest>) -> Result<Response<GetCctxInfoResponse>, Status> {
+    async fn get_cctx_info(&self, request: Request<GetCctxInfoRequest>) -> Result<Response<CrossChainTx>, Status> {
 
         let request = request.into_inner();
 
@@ -32,9 +32,13 @@ impl CctxInfoService for CctxService {
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
 
-        
-        let cctx= complete_cctx 
-        .map(|entity|
+        if complete_cctx.is_none() {
+            return Err(Status::not_found("CCTX not found"));
+        }
+
+        let entity = complete_cctx.unwrap();
+
+        let cctx= 
             CrossChainTx {
                 creator: entity.cctx.creator,
                 index: entity.cctx.index,
@@ -97,13 +101,13 @@ impl CctxInfoService for CctxService {
                     revert_message: entity.revert.revert_message.unwrap_or_default().as_bytes().to_vec().into(),
                     revert_gas_limit: entity.revert.revert_gas_limit,
                 }),
-            }
-        );
+            };
+
 
         
-        Ok(Response::new(GetCctxInfoResponse {
+        Ok(Response::new(
             cctx,
-        }))
+        ))
     }
 }
 
