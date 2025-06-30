@@ -16,7 +16,6 @@ use zetachain_cctx_entity::{
 use sea_orm::ColumnTrait;
 
 use crate::{client::Client, settings::IndexerSettings};
-use chrono::Utc;
 use futures::StreamExt;
 use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter};
 use tracing::{instrument, Instrument};
@@ -60,12 +59,11 @@ async fn gap_fill(
 ) -> anyhow::Result<Option<String>> {
     let PagedCCTXResponse { cross_chain_tx : cctxs, pagination } = client.list_cctx(Some(&watermark.pointer), false, batch_size,job_id).await.unwrap();
     
-    tracing::info!("fetched {} cctxs", cctxs.iter().map(|cctx| cctx.index.clone()).collect::<Vec<String>>().join(", "));
     let earliest_cctx = cctxs.last().unwrap();
     let last_synced_cctx = database.get_cctx(earliest_cctx.index.clone()).await?;
 
     if last_synced_cctx.is_some() {
-        tracing::info!("last synced cctx {} is present, skipping", earliest_cctx.index);
+        tracing::debug!("last synced cctx {} is present, skipping", earliest_cctx.index);
         return Ok(None);
     }
     database.batch_insert_transactions(job_id, &cctxs).await?;    
@@ -296,11 +294,11 @@ impl Indexer {
                            
                            match gap_fill(job_id, database.clone(), &client, watermark.clone(), gap_fill_batch_size).await {
                             std::result::Result::Ok(Some(next_key)) => {
-                                tracing::info!("moving watermark {} to {}", watermark.pointer, next_key);
+                                tracing::debug!("moving watermark {} to {}", watermark.pointer, next_key);
                                 database.move_watermark(watermark, next_key).await.unwrap();
                             }
                             std::result::Result::Ok(None) => {
-                                tracing::info!("deleting watermark {}", watermark.pointer);
+                                tracing::debug!("deleting watermark {}", watermark.pointer);
                                 database.delete_watermark(watermark).await.unwrap();
                             }
                             Err(e) => {

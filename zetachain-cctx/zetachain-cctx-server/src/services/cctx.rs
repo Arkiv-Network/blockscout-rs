@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
-use zetachain_cctx_logic::database::ZetachainCctxDatabase;
+use zetachain_cctx_logic::database::{ZetachainCctxDatabase};
 use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::{
     cctx_info_service_server::CctxInfoService, CallOptions, CrossChainTx, GetCctxInfoRequest, InboundParams, ListCctxsRequest, ListCctxsResponse, OutboundParams, RevertOptions, Status as CCTXStatus
 };
@@ -27,7 +27,78 @@ impl CctxInfoService for CctxService {
     async fn list_cctxs(&self, request: Request<ListCctxsRequest>) -> Result<Response<ListCctxsResponse>, Status> {
         let request = request.into_inner();
 
-        todo!()
+        let cctx_items = self.database.list_cctxs(request.limit, request.status).await.map_err(|e| Status::internal(e.to_string()))?;
+
+        // Convert CctxListItem to CrossChainTx with only required fields
+        let cctxs: Vec<CrossChainTx> = cctx_items.into_iter().map(|item| {
+            CrossChainTx {
+                creator: String::new(), // Not required for list view
+                index: item.index,
+                zeta_fees: String::new(), // Not required for list view
+                relayed_message: String::new(), // Not required for list view
+                cctx_status: Some(CCTXStatus {
+                    status: item.status.into(),
+                    status_message: String::new(),
+                    error_message: String::new(),
+                    last_update_timestamp: 0,
+                    is_abort_refunded: false,
+                    created_timestamp: 0,
+                    error_message_abort: String::new(),
+                    error_message_revert: String::new(),
+                }),
+                inbound_params: Some(InboundParams {
+                    sender: String::new(),
+                    sender_chain_id: item.source_chain_id.parse().unwrap_or(0),
+                    tx_origin: String::new(),
+                    coin_type: 0.into(), // Default to Zeta
+                    asset: String::new(),
+                    amount: String::new(),
+                    observed_hash: String::new(),
+                    observed_external_height: 0,
+                    ballot_index: String::new(),
+                    finalized_zeta_height: 0,
+                    tx_finalization_status: 0.into(),
+                    is_cross_chain_call: false,
+                    status: 0.into(),
+                    confirmation_mode: 0.into(),
+                }),
+                outbound_params: vec![OutboundParams {
+                    receiver: String::new(),
+                    receiver_chain_id: item.target_chain_id.parse().unwrap_or(0),
+                    coin_type: 0.into(), // Default to Zeta
+                    amount: item.amount,
+                    tss_nonce: 0,
+                    gas_limit: 0,
+                    gas_price: String::new(),
+                    gas_priority_fee: String::new(),
+                    hash: String::new(),
+                    ballot_index: String::new(),
+                    observed_external_height: 0,
+                    gas_used: 0,
+                    effective_gas_price: String::new(),
+                    effective_gas_limit: 0,
+                    tss_pubkey: String::new(),
+                    tx_finalization_status: 0.into(),
+                    call_options: Some(CallOptions {
+                        gas_limit: 0,
+                        is_arbitrary_call: false,
+                    }),
+                    confirmation_mode: 0.into(),
+                }],
+                protocol_contract_version: 0.into(),
+                revert_options: Some(RevertOptions {
+                    revert_address: String::new(),
+                    call_on_revert: false,
+                    abort_address: String::new(),
+                    revert_message: vec![].into(),
+                    revert_gas_limit: String::new(),
+                }),
+            }
+        }).collect();
+
+        Ok(Response::new(ListCctxsResponse {
+            cctxs
+        }))
     }
     async fn get_cctx_info(&self, request: Request<GetCctxInfoRequest>) -> Result<Response<CrossChainTx>, Status> {
 

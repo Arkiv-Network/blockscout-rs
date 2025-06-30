@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Ok;
 use chrono::Utc;
 use sea_orm::{ActiveValue, DatabaseConnection, DbBackend, Statement, TransactionTrait};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 use tracing::{instrument, Instrument};
 use uuid::Uuid;
 use zetachain_cctx_entity::sea_orm_active_enums::{CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, Kind, ProtocolContractVersion};
@@ -12,7 +12,6 @@ use zetachain_cctx_entity::{
     cross_chain_tx as CrossChainTxEntity, outbound_params as OutboundParamsEntity,
     sea_orm_active_enums::TxFinalizationStatus,
 };
-
 use crate::models::CrossChainTx;
 
 pub struct ZetachainCctxDatabase {
@@ -38,6 +37,16 @@ pub struct CompleteCctx {
     pub inbound: inbound_params::Model,
     pub outbounds: Vec<OutboundParamsEntity::Model>,
     pub revert: revert_options::Model,
+}
+
+// Add this struct for the simplified CCTX list view
+#[derive(Debug)]
+pub struct CctxListItem {
+    pub index: String,
+    pub status: CctxStatusStatus,
+    pub amount: String,
+    pub source_chain_id: String,
+    pub target_chain_id: String,
 }
 
 impl ZetachainCctxDatabase {
@@ -145,7 +154,6 @@ pub async fn batch_insert_transactions(
         return Ok(());
     }
 
-    tracing::info!("inserting {} cctxs", transactions.iter().map(|tx| tx.index.clone()).collect::<Vec<String>>().join(", "));
     // Prepare batch data for each table
     let mut cctx_models = Vec::new();
     let mut status_models = Vec::new();
@@ -625,6 +633,64 @@ async fn insert_transaction(
             outbounds,
             revert,
         }))
+    }
+
+    pub async fn list_cctxs(
+        &self,
+        limit: i64,
+        status_filter: Option<String>,
+    ) -> anyhow::Result<Vec<CctxListItem>> {
+        // First, get CCTX records with their status
+        let mut query = CrossChainTxEntity::Entity::find()
+            .inner_join(cctx_status::Entity)
+            .limit(limit as u64);
+
+        // Apply status filter if provided
+        if let Some(status_str) = status_filter {
+            let status_enum = CctxStatusStatus::try_from(status_str.clone())
+                .map_err(|_| anyhow::anyhow!("Invalid status: {}", status_str))?;
+            query = query.filter(cctx_status::Column::Status.eq(status_enum));
+        }
+
+        // Get the CCTX records
+        let cctxs = query.all(self.db.as_ref()).await?;
+
+        // For each CCTX, get the status, inbound and outbound params
+        let mut items = Vec::new();
+        for cctx in cctxs {
+            // Get status
+            let status = cctx_status::Entity::find()
+                .filter(cctx_status::Column::CrossChainTxId.eq(cctx.id))
+                .one(self.db.as_ref())
+                .await?;
+
+            // Get inbound params
+            let inbound = inbound_params::Entity::find()
+                .filter(inbound_params::Column::CrossChainTxId.eq(cctx.id))
+                .one(self.db.as_ref())
+                .await?;
+
+            // Get outbound params
+            let outbounds = OutboundParamsEntity::Entity::find()
+                .filter(OutboundParamsEntity::Column::CrossChainTxId.eq(cctx.id))
+                .all(self.db.as_ref())
+                .await?;
+
+            if let (Some(status), Some(inbound)) = (status, inbound) {
+                // Use the first outbound for amount and target chain ID
+                if let Some(outbound) = outbounds.first() {
+                    items.push(CctxListItem {
+                        index: cctx.index,
+                        status: status.status,
+                        amount: outbound.amount.clone(),
+                        source_chain_id: inbound.sender_chain_id.clone(),
+                        target_chain_id: outbound.receiver_chain_id.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(items)
     }
 
 }

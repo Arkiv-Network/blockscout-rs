@@ -238,6 +238,17 @@ async fn test_parse_historical_data() {
     });
 
     Mock::given(method("GET"))
+    .and(path("/crosschain/cctx"))
+    .and(query_param("unordered", "true"))
+    .and(query_param("pagination.key", "end"))
+    .respond_with(
+        ResponseTemplate::new(200)
+            .set_body_json(&empty_response),
+    )
+    .mount(&mock_server)
+    .await;
+
+    Mock::given(method("GET"))
         .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "false"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
@@ -363,8 +374,10 @@ async fn test_lock_watermark() {
 #[tokio::test]
 async fn test_get_cctx_info() {
     let db = crate::helpers::init_db("test", "indexer_get_cctx_info").await;
-    let last_update_timestamp= chrono::DateTime::<Utc>::from_timestamp(1750344684 as i64, 0).unwrap();
-    let insert_statement = format!(r#"
+    let last_update_timestamp =
+        chrono::DateTime::<Utc>::from_timestamp(1750344684 as i64, 0).unwrap();
+    let insert_statement = format!(
+        r#"
     INSERT INTO cross_chain_tx (id, creator, index, zeta_fees, lock, relayed_message, last_status_update_timestamp, protocol_contract_version) 
     VALUES (1, 'zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm', '0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31', '0', false, '', '2025-01-19 12:31:24', 'V2');
     INSERT INTO cctx_status (id, cross_chain_tx_id, status, status_message, error_message, last_update_timestamp, is_abort_refunded, created_timestamp, error_message_revert, error_message_abort) 
@@ -375,7 +388,9 @@ async fn test_get_cctx_info() {
     VALUES (1, 1, '0x33c2f2B93798629f1311cA9ade3D4BF732011718', '7001', 'Gas', '0', '0', '0', '', '', '0xcd6c1391ca9950bb527b36b21ac75bccd29e7a2adf105662cb5eadd4bda5b4d5', '', '10966764', '0', '0', '0', 'zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p', 'Executed', '0', false, 'SAFE');
     INSERT INTO revert_options (id, cross_chain_tx_id, revert_address, call_on_revert, abort_address, revert_message, revert_gas_limit) 
     VALUES (1, 1, '', false, '', NULL, '0');
-    "#, last_update_timestamp.naive_utc().to_string());
+    "#,
+        last_update_timestamp.naive_utc().to_string()
+    );
 
     // let insert_statement = Statement::from_string(db.client().as_ref().get_database_backend(), insert_statement);
 
@@ -425,12 +440,20 @@ async fn test_get_cctx_info() {
     assert_eq!(cctx.outbounds[0].gas_limit, "0");
 
     let client = Client::new(RpcSettings::default());
-    let base =
-        helpers::init_zetachain_cctx_server(db.db_url(), |x| x, db.client(), Arc::new(client))
-            .await;
+    let base = helpers::init_zetachain_cctx_server(
+        db.db_url(),
+        |mut x| {
+            x.indexer.concurrency = 1;
+            x.indexer.polling_interval = 1000;
+            x
+        },
+        db.client(),
+        Arc::new(client),
+    )
+    .await;
     let response: serde_json::Value = test_server::send_get_request(&base, "/api/v1/CctxInfoService:get?cctx_id=0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31")
                 .await;
-    let expected_response =  json!({
+    let expected_response = json!({
         "creator": "zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm",
         "index": "0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31",
         "zeta_fees": "0",
@@ -497,8 +520,8 @@ async fn test_get_cctx_info() {
     });
 
     println!("response: {}", response);
-    let parsed_cctx:CrossChainTx = serde_json::from_value(response).unwrap();
-    let expected_cctx:CrossChainTx = serde_json::from_value(expected_response).unwrap();
+    let parsed_cctx: CrossChainTx = serde_json::from_value(response).unwrap();
+    let expected_cctx: CrossChainTx = serde_json::from_value(expected_response).unwrap();
 
     assert_eq!(parsed_cctx.index, expected_cctx.index);
     assert_eq!(parsed_cctx.creator, expected_cctx.creator);
@@ -508,13 +531,26 @@ async fn test_get_cctx_info() {
     let expected_cctx_status = expected_cctx.cctx_status.unwrap();
     let parsed_cctx_status = parsed_cctx.cctx_status.unwrap();
     assert_eq!(parsed_cctx_status.status, expected_cctx_status.status);
-    assert_eq!(parsed_cctx_status.status_message, expected_cctx_status.status_message);
-    assert_eq!(parsed_cctx_status.error_message, expected_cctx_status.error_message);
-    assert_eq!(parsed_cctx_status.last_update_timestamp, expected_cctx_status.last_update_timestamp);
-    assert_eq!(parsed_cctx_status.is_abort_refunded, expected_cctx_status.is_abort_refunded);
-    assert_eq!(parsed_cctx_status.created_timestamp, expected_cctx_status.created_timestamp);
-    
-    
+    assert_eq!(
+        parsed_cctx_status.status_message,
+        expected_cctx_status.status_message
+    );
+    assert_eq!(
+        parsed_cctx_status.error_message,
+        expected_cctx_status.error_message
+    );
+    assert_eq!(
+        parsed_cctx_status.last_update_timestamp,
+        expected_cctx_status.last_update_timestamp
+    );
+    assert_eq!(
+        parsed_cctx_status.is_abort_refunded,
+        expected_cctx_status.is_abort_refunded
+    );
+    assert_eq!(
+        parsed_cctx_status.created_timestamp,
+        expected_cctx_status.created_timestamp
+    );
 }
 
 #[tokio::test]
@@ -523,11 +559,12 @@ async fn test_gap_fill() {
 
     //simulate some sync progress
     // let last_update_timestamp= chrono::DateTime::<Utc>::from_timestamp(1750344684 as i64, 0).unwrap();
-    let insert_statement = format!(r#"
+    let insert_statement = format!(
+        r#"
     INSERT INTO cross_chain_tx (creator, index, zeta_fees, lock, relayed_message, last_status_update_timestamp, protocol_contract_version) 
     VALUES ('zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm', '0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31', '0', false, '', '2025-01-19 12:31:24', 'V2');
-    "#);
-
+    "#
+    );
 
     db.client()
         .execute_unprepared(&insert_statement)
@@ -565,22 +602,24 @@ async fn test_gap_fill() {
         .mount(&mock_server)
         .await;
     Mock::given(method("GET"))
-    .and(path("/crosschain/cctx"))
-    .and(query_param("unordered", "false"))
-    .and(query_param("pagination.key", "SECOND_PAGE"))
-    .respond_with(ResponseTemplate::new(200).set_body_json(
-        serde_json::from_str::<serde_json::Value>(SECOND_PAGE_RESPONSE).unwrap(),
-    ))
-    .mount(&mock_server)
-    .await;
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "false"))
+        .and(query_param("pagination.key", "SECOND_PAGE"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::from_str::<serde_json::Value>(SECOND_PAGE_RESPONSE).unwrap(),
+        ))
+        .mount(&mock_server)
+        .await;
 
     // simulate realtime fetcher getting some relevant data
     Mock::given(method("GET"))
         .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "false"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::from_str::<serde_json::Value>(FIRST_PAGE_RESPONSE).unwrap(),
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::from_str::<serde_json::Value>(FIRST_PAGE_RESPONSE).unwrap(),
+            ),
+        )
         .mount(&mock_server)
         .await;
 
@@ -590,37 +629,34 @@ async fn test_gap_fill() {
         .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "false"))
         .and(query_param("pagination.key", "THIRD_PAGE"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::from_str::<serde_json::Value>(THIRD_PAGE_RESPONSE).unwrap(),
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::from_str::<serde_json::Value>(THIRD_PAGE_RESPONSE).unwrap(),
+            ),
+        )
         .up_to_n_times(1)
         .mount(&mock_server)
         .await;
-        
 
-    let rpc_client = Client::new(RpcSettings { url: mock_server.uri(), ..Default::default()});
-    
-    // let indexer = Indexer::new(
-    //     IndexerSettings {
-    //         polling_interval: 100, // Fast polling for tests
-    //         concurrency: 1,
-    //         ..Default::default()
-    //     },
-    //     db.client().clone(),
-    //     Arc::new(client),
-    //     Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
-    // );
+    let rpc_client = Client::new(RpcSettings {
+        url: mock_server.uri(),
+        ..Default::default()
+    });
 
-    let db_url = db.db_url();
-    let db_client = db.client().clone();
+    let indexer = Indexer::new(
+        IndexerSettings {
+            polling_interval: 100, // Fast polling for tests
+            concurrency: 1,
+            ..Default::default()
+        },
+        db.client().clone(),
+        Arc::new(rpc_client),
+        Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
+    );
+
     let indexer_handle = tokio::spawn(async move {
-        // let _ = indexer.run().await;
-        let _ = init_zetachain_cctx_server(db_url, |mut x| {
-            x.indexer.concurrency = 1;
-            x.indexer.polling_interval = 100;
-            x
-        }, db_client, Arc::new(rpc_client)).await;
-    }); 
+        let _ = indexer.run().await;
+    });
 
     tokio::time::sleep(Duration::from_millis(2000)).await;
 
@@ -633,9 +669,6 @@ async fn test_gap_fill() {
 
     // 7 cctxs are expected: 1 historical, 6 realtime
     assert_eq!(cctx_count, 7);
-
-    
-    
 }
 
 async fn setup_status_update_mock_responses(mock_server: &MockServer) {
@@ -731,8 +764,6 @@ async fn setup_historical_mock_responses(mock_server: &MockServer) {
 }
 
 use std::fs;
-
-use crate::helpers::init_zetachain_cctx_server;
 
 pub const FIRST_PAGE_RESPONSE: &str = r#"
 {
