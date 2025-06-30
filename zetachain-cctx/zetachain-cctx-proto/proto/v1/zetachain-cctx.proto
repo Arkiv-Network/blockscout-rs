@@ -21,6 +21,11 @@ message ListCctxsRequest {
   optional string status = 3;
 }
 
+message ListCctxsResponse {
+  repeated CrossChainTx cctxs = 1;
+}
+
+
 
 enum CoinType {
   Zeta = 0;

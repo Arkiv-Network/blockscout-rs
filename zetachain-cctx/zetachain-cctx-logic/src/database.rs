@@ -145,6 +145,7 @@ pub async fn batch_insert_transactions(
         return Ok(());
     }
 
+    tracing::info!("inserting {} cctxs", transactions.iter().map(|tx| tx.index.clone()).collect::<Vec<String>>().join(", "));
     // Prepare batch data for each table
     let mut cctx_models = Vec::new();
     let mut status_models = Vec::new();
@@ -321,6 +322,18 @@ pub async fn lock_watermark(&self, watermark: watermark::Model) -> anyhow::Resul
         lock: ActiveValue::Set(true),
         ..Default::default()
     }).filter(watermark::Column::Id.eq(watermark.id))
+    .exec(self.db.as_ref())
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
+
+    watermark::Entity::delete(watermark::ActiveModel {
+        id: ActiveValue::Unchanged(watermark.id),
+        ..Default::default()
+    })
+    .filter(watermark::Column::Id.eq(watermark.id))
     .exec(self.db.as_ref())
     .await?;
     Ok(())

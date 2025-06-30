@@ -50,28 +50,32 @@ async fn update_cctx_status(
     Ok(())
 }
 
-#[instrument(,level="debug",skip(database, client), fields(job_id = %job_id))]
+#[instrument(,level="info",skip(database, client), fields(job_id = %job_id))]
 async fn gap_fill(
     job_id: Uuid,
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
     watermark: watermark::Model,
-) -> anyhow::Result<()> {
-    let PagedCCTXResponse { cross_chain_tx : cctxs, pagination } = client.list_cctx(Some(&watermark.pointer), true, 100,job_id).await.unwrap();
+    batch_size: u32,
+) -> anyhow::Result<Option<String>> {
+    let PagedCCTXResponse { cross_chain_tx : cctxs, pagination } = client.list_cctx(Some(&watermark.pointer), false, batch_size,job_id).await.unwrap();
     
+    tracing::info!("fetched {} cctxs", cctxs.iter().map(|cctx| cctx.index.clone()).collect::<Vec<String>>().join(", "));
     let earliest_cctx = cctxs.last().unwrap();
     let last_synced_cctx = database.get_cctx(earliest_cctx.index.clone()).await?;
 
-    if last_synced_cctx.is_none() {
-        database.batch_insert_transactions(job_id, &cctxs).await?;    
+    if last_synced_cctx.is_some() {
+        tracing::info!("last synced cctx {} is present, skipping", earliest_cctx.index);
+        return Ok(None);
     }
+    database.batch_insert_transactions(job_id, &cctxs).await?;    
     let next_key = pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
-    database.move_watermark(watermark, next_key).await?;
-    Ok(())
+    
+    Ok(Some(next_key))
 }
 
 
-#[instrument(,level="debug",skip(database, client), fields(job_id = %job_id))]
+#[instrument(,level="trace",skip(database, client), fields(job_id = %job_id))]
 async fn historical_sync(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -130,7 +134,7 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
     if earliest_loaded.is_none() {
             // the lower boundary is not covered, so there could be more transaction that happened earlier, that we haven't observed
             //we have to save current pointer to continue fetching until we hit a known transaction
-            tracing::debug!("earliest cctx not found, creating new realtime watermark");
+            tracing::debug!("earliest cctx not found, creating new realtime watermark {}", next_key);
             database.create_realtime_watermark(next_key).await?;
     } 
 
@@ -172,7 +176,6 @@ impl Indexer {
             loop {
                 let job_id = Uuid::new_v4();
                 realtime_fetch(job_id, database.clone(), &client)
-                .instrument(tracing::debug_span!("realtime fetch", job_id = %job_id))
                 .await
                 .unwrap();
                 tokio::time::sleep(Duration::from_millis(polling_interval)).await;
@@ -213,7 +216,6 @@ impl Indexer {
                 let watermarks = watermark::Entity::find()
                     .filter(watermark::Column::Kind.eq(Kind::Realtime))
                     .filter(watermark::Column::Lock.eq(false))
-                    .filter(watermark::Column::UpdatedAt.lt(Utc::now() - Duration::from_secs(10))) //TODO: make it configurable
                     .all(db.as_ref())
                     .await
                     .unwrap();
@@ -278,7 +280,8 @@ impl Indexer {
             .for_each_concurrent(Some(self.settings.concurrency as usize), |job| {
                 let client = self.client.clone();
                 let database = self.database.clone();
-                let batch_size = self.settings.historical_batch_size;
+                let historical_batch_size = self.settings.historical_batch_size;
+                let gap_fill_batch_size = self.settings.realtime_fetch_batch_size;
                 tokio::spawn(async move {
                     match job {
                         IndexerJob::StatusUpdate(existing_cctx, job_id) => {
@@ -290,14 +293,25 @@ impl Indexer {
                             }
                         }
                         IndexerJob::GapFill(watermark, job_id) => {
-                            if let Err(e) = gap_fill(job_id, database.clone(), &client, watermark.clone())
-                            .await {
-                                tracing::error!(error = %e, job_id = %job_id, "Failed to fetch gap fill data");
+                           
+                           match gap_fill(job_id, database.clone(), &client, watermark.clone(), gap_fill_batch_size).await {
+                            std::result::Result::Ok(Some(next_key)) => {
+                                tracing::info!("moving watermark {} to {}", watermark.pointer, next_key);
+                                database.move_watermark(watermark, next_key).await.unwrap();
                             }
-                            database.unlock_watermark(watermark).await.unwrap();
+                            std::result::Result::Ok(None) => {
+                                tracing::info!("deleting watermark {}", watermark.pointer);
+                                database.delete_watermark(watermark).await.unwrap();
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, job_id = %job_id, "Failed to fetch gap fill data");
+                                database.unlock_watermark(watermark).await.unwrap();
+                            }
+                           }
+                           
                         }
                         IndexerJob::HistoricalDataFetch(watermark, job_id) => { 
-                            if let Err(e) =historical_sync(database.clone(), &client, watermark.clone(), job_id, batch_size)
+                            if let Err(e) =historical_sync(database.clone(), &client, watermark.clone(), job_id, historical_batch_size)
                             .await {
                                 tracing::error!(error = %e, job_id = %job_id, "Failed to fetch historical data");
                                 database.unlock_watermark(watermark).await.unwrap();

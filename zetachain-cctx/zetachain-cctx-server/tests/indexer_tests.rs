@@ -517,6 +517,127 @@ async fn test_get_cctx_info() {
     
 }
 
+#[tokio::test]
+async fn test_gap_fill() {
+    let db = crate::helpers::init_db("test", "indexer_gap_fill").await;
+
+    //simulate some sync progress
+    // let last_update_timestamp= chrono::DateTime::<Utc>::from_timestamp(1750344684 as i64, 0).unwrap();
+    let insert_statement = format!(r#"
+    INSERT INTO cross_chain_tx (creator, index, zeta_fees, lock, relayed_message, last_status_update_timestamp, protocol_contract_version) 
+    VALUES ('zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm', '0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31', '0', false, '', '2025-01-19 12:31:24', 'V2');
+    "#);
+
+
+    db.client()
+        .execute_unprepared(&insert_statement)
+        .await
+        .unwrap();
+
+    // suppress historical sync
+    watermark::Entity::insert(watermark::ActiveModel {
+        id: ActiveValue::NotSet,
+        kind: ActiveValue::Set(Kind::Historical),
+        pointer: ActiveValue::Set("end".to_string()),
+        lock: ActiveValue::Set(false),
+        created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+    })
+    .exec(db.client().as_ref())
+    .await
+    .unwrap();
+
+    let mock_server = MockServer::start().await;
+    let empty_response = serde_json::json!({
+        "CrossChainTx": [],
+        "pagination": {
+            "next_key": "end",
+            "total": "0"
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "true"))
+        .and(query_param("pagination.key", "end"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::from_str::<serde_json::Value>(&empty_response.to_string()).unwrap(),
+        ))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+    .and(path("/crosschain/cctx"))
+    .and(query_param("unordered", "false"))
+    .and(query_param("pagination.key", "SECOND_PAGE"))
+    .respond_with(ResponseTemplate::new(200).set_body_json(
+        serde_json::from_str::<serde_json::Value>(SECOND_PAGE_RESPONSE).unwrap(),
+    ))
+    .mount(&mock_server)
+    .await;
+
+    // simulate realtime fetcher getting some relevant data
+    Mock::given(method("GET"))
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "false"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::from_str::<serde_json::Value>(FIRST_PAGE_RESPONSE).unwrap(),
+        ))
+        .mount(&mock_server)
+        .await;
+
+    // since these cctx are absent, the indexer is exprected to follow through and request the next page
+
+    Mock::given(method("GET"))
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "false"))
+        .and(query_param("pagination.key", "THIRD_PAGE"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::from_str::<serde_json::Value>(THIRD_PAGE_RESPONSE).unwrap(),
+        ))
+        .up_to_n_times(1)
+        .mount(&mock_server)
+        .await;
+        
+
+    let rpc_client = Client::new(RpcSettings { url: mock_server.uri(), ..Default::default()});
+    
+    // let indexer = Indexer::new(
+    //     IndexerSettings {
+    //         polling_interval: 100, // Fast polling for tests
+    //         concurrency: 1,
+    //         ..Default::default()
+    //     },
+    //     db.client().clone(),
+    //     Arc::new(client),
+    //     Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
+    // );
+
+    let db_url = db.db_url();
+    let db_client = db.client().clone();
+    let indexer_handle = tokio::spawn(async move {
+        // let _ = indexer.run().await;
+        let _ = init_zetachain_cctx_server(db_url, |mut x| {
+            x.indexer.concurrency = 1;
+            x.indexer.polling_interval = 100;
+            x
+        }, db_client, Arc::new(rpc_client)).await;
+    }); 
+
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+
+    indexer_handle.abort();
+
+    let cctx_count = cross_chain_tx::Entity::find()
+        .count(db.client().as_ref())
+        .await
+        .unwrap();
+
+    // 7 cctxs are expected: 1 historical, 6 realtime
+    assert_eq!(cctx_count, 7);
+
+    
+    
+}
+
 async fn setup_status_update_mock_responses(mock_server: &MockServer) {
     let pending_tx_index = "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759";
     Mock::given(method("GET"))
@@ -610,6 +731,8 @@ async fn setup_historical_mock_responses(mock_server: &MockServer) {
 }
 
 use std::fs;
+
+use crate::helpers::init_zetachain_cctx_server;
 
 pub const FIRST_PAGE_RESPONSE: &str = r#"
 {

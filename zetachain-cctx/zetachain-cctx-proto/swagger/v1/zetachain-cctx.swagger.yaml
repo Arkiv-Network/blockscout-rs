@@ -215,6 +215,14 @@ definitions:
        - INVALID_RECEIVER_ADDRESS: the receiver address parsed from the inbound is invalid
        - INVALID_MEMO: parse memo is invalid
     title: InboundStatus represents the status of an observed inbound
+  v1ListCctxsResponse:
+    type: object
+    properties:
+      cctxs:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1CrossChainTx'
   v1OutboundParams:
     type: object
     properties:
