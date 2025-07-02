@@ -108,9 +108,56 @@ impl MigrationTrait for Migration {
                             .enumeration("protocol_contract_version", ["V1", "V2"])
                             .not_null(),
                     )
+                    .col(
+                        ColumnDef::new(CrossChainTx::RootId)
+                            .integer()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(CrossChainTx::ParentId)
+                            .integer()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(CrossChainTx::TreeQueryFlag)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
+                    .col(
+                        ColumnDef::new(CrossChainTx::Depth)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
                     .to_owned(),
             )
             .await?;
+
+        // Add foreign key constraints for self-referential relationships
+        
+        manager
+            .create_foreign_key(
+                ForeignKey::create()
+                    .name("fk_cross_chain_tx_root")
+                    .from(CrossChainTx::Table, CrossChainTx::RootId)
+                    .to(CrossChainTx::Table, CrossChainTx::Id)
+                    .on_delete(ForeignKeyAction::SetNull)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_foreign_key(
+                ForeignKey::create()
+                    .name("fk_cross_chain_tx_parent")
+                    .from(CrossChainTx::Table, CrossChainTx::ParentId)
+                    .to(CrossChainTx::Table, CrossChainTx::Id)
+                    .on_delete(ForeignKeyAction::SetNull)
+                    .to_owned(),
+            )
+            .await?;
+
         manager
             .create_index(
                 Index::create()
@@ -407,6 +454,25 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Drop foreign key constraints first
+        manager
+            .drop_foreign_key(
+                ForeignKey::drop()
+                    .name("fk_cross_chain_tx_root")
+                    .table(CrossChainTx::Table)
+                    .to_owned(),
+            )
+            .await?;
+            
+        manager
+            .drop_foreign_key(
+                ForeignKey::drop()
+                    .name("fk_cross_chain_tx_parent")
+                    .table(CrossChainTx::Table)
+                    .to_owned(),
+            )
+            .await?;
+
         manager
             .drop_index(
                 Index::drop()
@@ -471,6 +537,10 @@ enum CrossChainTx {
     RelayedMessage,
     ProtocolContractVersion,
     LastStatusUpdateTimestamp,
+    RootId,
+    ParentId,
+    TreeQueryFlag,
+    Depth,
 }
 
 #[derive(Iden)]

@@ -14,6 +14,12 @@ pub struct CCTXResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct InboundHashToCctxResponse {
+    #[serde(rename = "CrossChainTxs")]
+    pub cross_chain_txs: Vec<CrossChainTx>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CrossChainTx {
     pub creator: String,
     pub index: String,

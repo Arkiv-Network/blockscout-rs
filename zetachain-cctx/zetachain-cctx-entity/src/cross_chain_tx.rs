@@ -17,12 +17,32 @@ pub struct Model {
     pub relayed_message: Option<String>,
     pub last_status_update_timestamp: DateTime,
     pub protocol_contract_version: ProtocolContractVersion,
+    pub root_id: Option<i32>,
+    pub parent_id: Option<i32>,
+    pub tree_query_flag: bool,
+    pub depth: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(has_one = "super::cctx_status::Entity")]
     CctxStatus,
+    #[sea_orm(
+        belongs_to = "Entity",
+        from = "Column::ParentId",
+        to = "Column::Id",
+        on_update = "NoAction",
+        on_delete = "SetNull"
+    )]
+    SelfRef2,
+    #[sea_orm(
+        belongs_to = "Entity",
+        from = "Column::RootId",
+        to = "Column::Id",
+        on_update = "NoAction",
+        on_delete = "SetNull"
+    )]
+    SelfRef1,
     #[sea_orm(has_many = "super::inbound_params::Entity")]
     InboundParams,
     #[sea_orm(has_many = "super::outbound_params::Entity")]

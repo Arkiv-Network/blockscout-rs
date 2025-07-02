@@ -12,7 +12,7 @@ use tokio::time::timeout;
 use tracing::Instrument;
 use uuid::Uuid;
 
-use crate::models::{CCTXResponse, CrossChainTx, PagedCCTXResponse};
+use crate::models::{CCTXResponse, CrossChainTx, InboundHashToCctxResponse, PagedCCTXResponse};
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -122,6 +122,37 @@ impl Client {
 
         let text = response.text().await?;
         let body = serde_json::from_str::<PagedCCTXResponse>(&text)
+            .map_err(|e| anyhow::anyhow!("JSON parsing error: {}\n{}", e, text))?;    
+        Ok(body)
+    }
+
+    pub async fn get_inbound_hash_to_cctx_data(
+        &self,
+        cctx_index: &str,
+        job_id: Uuid,
+    ) -> Result<InboundHashToCctxResponse, Error> {
+        let mut url: Url = self.settings.url.parse().unwrap();
+        let path = url.path();
+        url.set_path(&format!("{}zeta-chain/crosschain/inboundHashToCctxData/{}", path, cctx_index));
+
+        let request = Request::new(Method::GET, url.clone());
+        let response = self
+            .make_request(request)
+            .instrument(tracing::debug_span!("executing get_inbound_hash_to_cctx_data", url = url.as_str(), job_id = %job_id))
+            .await?;
+
+        // Handle 404 by returning an empty result
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(InboundHashToCctxResponse {
+                cross_chain_txs: Vec::new(),
+            });
+        }
+
+        let response = response.error_for_status()
+            .map_err(|e| anyhow::anyhow!("HTTP request error: {}", e))?;
+
+        let text = response.text().await?;
+        let body = serde_json::from_str::<InboundHashToCctxResponse>(&text)
             .map_err(|e| anyhow::anyhow!("JSON parsing error: {}\n{}", e, text))?;    
         Ok(body)
     }
