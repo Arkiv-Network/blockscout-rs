@@ -9,6 +9,7 @@ use sea_orm::{
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 use tracing::{instrument, Instrument};
 use uuid::Uuid;
+use zetachain_cctx_entity::sea_orm_active_enums::ProcessingStatus;
 use zetachain_cctx_entity::{
     cctx_status, cross_chain_tx as CrossChainTxEntity, inbound_params,
     outbound_params as OutboundParamsEntity, revert_options,
@@ -112,6 +113,7 @@ impl ZetachainCctxDatabase {
         Ok(cctx.iter().map(|cctx| cctx.id).collect())
     }
 
+    #[instrument(level="debug",skip_all)]
     pub async fn update_cctx_tree_relationships(
         &self,
         cctx_ids: Vec<i32>,
@@ -188,9 +190,9 @@ impl ZetachainCctxDatabase {
 
         tracing::debug!("removing lock from cctxs");
         CrossChainTxEntity::Entity::update_many()
-            .filter(CrossChainTxEntity::Column::Lock.eq(true))
+            .filter(CrossChainTxEntity::Column::ProcessingStatus.eq(ProcessingStatus::Locked))
             .set(CrossChainTxEntity::ActiveModel {
-                lock: ActiveValue::Set(false),
+                processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
                 ..Default::default()
             })
             .exec(self.db.as_ref())
@@ -200,7 +202,7 @@ impl ZetachainCctxDatabase {
             tracing::debug!("inserting historical watermark");
             watermark::Entity::insert(watermark::ActiveModel {
                 kind: ActiveValue::Set(Kind::Historical),
-                lock: ActiveValue::Set(false),
+                processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
                 pointer: ActiveValue::Set("MH==".to_string()), //0 in base64
                 created_at: ActiveValue::Set(Utc::now().naive_utc()),
                 updated_at: ActiveValue::Set(Utc::now().naive_utc()),
@@ -215,9 +217,9 @@ impl ZetachainCctxDatabase {
             );
         }
         watermark::Entity::update_many()
-            .filter(watermark::Column::Lock.eq(true))
+            .filter(watermark::Column::ProcessingStatus.eq(ProcessingStatus::Locked))
             .set(watermark::ActiveModel {
-                lock: ActiveValue::Set(false),
+                processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
                 ..Default::default()
             })
             .exec(self.db.as_ref())
@@ -226,6 +228,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
+    #[instrument(level="debug",skip_all)]
     pub async fn move_watermark(
         &self,
         watermark: watermark::Model,
@@ -234,7 +237,7 @@ impl ZetachainCctxDatabase {
     ) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Set(watermark.id),
-            lock: ActiveValue::Set(false),
+            processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             pointer: ActiveValue::Set(new_pointer.to_owned()),
             updated_at: ActiveValue::Set(Utc::now().naive_utc()),
             ..Default::default()
@@ -257,12 +260,13 @@ impl ZetachainCctxDatabase {
         Ok(cctx)
     }
 
+    #[instrument(level="debug",skip_all)]
     pub async fn create_realtime_watermark(&self, pointer: String) -> anyhow::Result<()> {
         watermark::Entity::insert(watermark::ActiveModel {
             id: ActiveValue::NotSet,
             kind: ActiveValue::Set(Kind::Realtime),
             pointer: ActiveValue::Set(pointer),
-            lock: ActiveValue::Set(false),
+            processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
             updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         })
@@ -301,6 +305,7 @@ pub async fn gap_fill(
 }
 
 
+#[instrument(level="debug",skip_all)]
 pub async fn process_realtime_cctxs(
     &self,
     job_id: Uuid,
@@ -563,7 +568,7 @@ pub async fn historical_sync(
     pub async fn unlock_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
         let res = watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark.id),
-            lock: ActiveValue::Set(false),
+            status: ActiveValue::Set(ProcessingStatus::Unlocked),
             updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
             ..Default::default()
         })
@@ -579,7 +584,7 @@ pub async fn historical_sync(
     pub async fn lock_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark.id),
-            lock: ActiveValue::Set(true),
+            status: ActiveValue::Set(ProcessingStatus::Locked),
             ..Default::default()
         })
         .filter(watermark::Column::Id.eq(watermark.id))
@@ -622,7 +627,7 @@ pub async fn historical_sync(
             SELECT cctx.id, cctx.index, cctx.last_status_update_timestamp
             FROM cross_chain_tx cctx
             JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
-            WHERE cs.status IN ('PendingInbound', 'PendingOutbound', 'PendingRevert')
+            WHERE (cs.status IN ('PendingInbound', 'PendingOutbound', 'PendingRevert') OR cctx.tree_query_flag = false)
             AND cctx.lock = false
             ORDER BY cctx.last_status_update_timestamp ASC
             LIMIT {batch_size}

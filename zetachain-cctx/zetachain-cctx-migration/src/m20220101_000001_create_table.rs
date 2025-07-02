@@ -31,6 +31,9 @@ impl MigrationTrait for Migration {
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'protocol_contract_version') THEN
                     CREATE TYPE protocol_contract_version AS ENUM ('V1', 'V2');
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'processing_status') THEN
+                    CREATE TYPE processing_status AS ENUM ('locked', 'unlocked', 'failed');
+                END IF;
             END $$;"#,
         )
         .await?;
@@ -54,10 +57,10 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Watermark::Pointer).string().not_null())
                     .col(
-                        ColumnDef::new(Watermark::Lock)
-                            .boolean()
+                        ColumnDef::new(Watermark::ProcessingStatus)
+                            .enumeration("processing_status", ["locked", "unlocked", "failed"])
                             .not_null()
-                            .default(false),
+                            .default("unlocked"),
                     )
                     .col(
                         ColumnDef::new(Watermark::CreatedAt)
@@ -91,10 +94,10 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(CrossChainTx::Index).string().not_null())
                     .col(ColumnDef::new(CrossChainTx::ZetaFees).string().not_null())
                     .col(
-                        ColumnDef::new(CrossChainTx::Lock)
-                            .boolean()
+                        ColumnDef::new(CrossChainTx::ProcessingStatus)
+                            .enumeration("processing_status", ["locked", "unlocked","failed"])
                             .not_null()
-                            .default(false),
+                            .default("unlocked"),
                     )
                     .col(ColumnDef::new(CrossChainTx::RelayedMessage).text().null())
                     .col(
@@ -521,7 +524,7 @@ enum Watermark {
     Id,
     Kind,
     Pointer,
-    Lock,
+    ProcessingStatus,
     CreatedAt,
     UpdatedAt,
 }
@@ -533,7 +536,7 @@ enum CrossChainTx {
     Creator,
     Index,
     ZetaFees,
-    Lock,
+    ProcessingStatus,
     RelayedMessage,
     ProtocolContractVersion,
     LastStatusUpdateTimestamp,

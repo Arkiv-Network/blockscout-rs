@@ -14,7 +14,7 @@ use wiremock::{
 };
 use zetachain_cctx_entity::cctx_status::{Column as CctxStatusColumn, Entity as CctxStatusEntity};
 use zetachain_cctx_entity::sea_orm_active_enums::CctxStatusStatus::OutboundMined;
-use zetachain_cctx_entity::sea_orm_active_enums::{CoinType, ProtocolContractVersion};
+use zetachain_cctx_entity::sea_orm_active_enums::{CoinType, ProtocolContractVersion, ProcessingStatus};
 use zetachain_cctx_entity::{cross_chain_tx, sea_orm_active_enums::Kind, watermark};
 
 use zetachain_cctx_logic::{
@@ -53,7 +53,7 @@ async fn test_historical_sync_updates_pointer() {
         id: ActiveValue::NotSet,
         kind: ActiveValue::Set(Kind::Historical),
         pointer: ActiveValue::Set("MH==".to_string()), // Start from beginning
-        lock: ActiveValue::Set(false),
+        status: ActiveValue::Set(ProcessingStatus::Unlocked),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
     };
@@ -159,7 +159,7 @@ async fn test_status_update() {
         id: ActiveValue::NotSet,
         kind: ActiveValue::Set(Kind::Historical),
         pointer: ActiveValue::Set("THIRD_PAGE".to_string()),
-        lock: ActiveValue::Set(false),
+        status: ActiveValue::Set(ProcessingStatus::Unlocked),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
     })
@@ -341,7 +341,7 @@ async fn test_lock_watermark() {
         id: ActiveValue::NotSet,
         kind: ActiveValue::Set(Kind::Historical),
         pointer: ActiveValue::Set("MH==".to_string()),
-        lock: ActiveValue::Set(false),
+        status: ActiveValue::Set(ProcessingStatus::Unlocked),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
     })
@@ -368,7 +368,7 @@ async fn test_lock_watermark() {
         .one(db.client().as_ref())
         .await
         .unwrap();
-    assert_eq!(watermark.unwrap().lock, false);
+    assert_eq!(watermark.unwrap().status, ProcessingStatus::Unlocked);
 }
 
 #[tokio::test]
@@ -576,7 +576,7 @@ async fn test_gap_fill() {
         id: ActiveValue::NotSet,
         kind: ActiveValue::Set(Kind::Historical),
         pointer: ActiveValue::Set("end".to_string()),
-        lock: ActiveValue::Set(false),
+        status: ActiveValue::Set(ProcessingStatus::Unlocked),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
     })

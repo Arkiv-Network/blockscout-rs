@@ -8,7 +8,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 use crate::database::ZetachainCctxDatabase;
 use crate::models::PagedCCTXResponse;
-use zetachain_cctx_entity::sea_orm_active_enums::{CctxStatusStatus, Kind};
+use zetachain_cctx_entity::sea_orm_active_enums::{CctxStatusStatus, Kind, ProcessingStatus};
 use zetachain_cctx_entity::{
     cctx_status, cross_chain_tx, watermark
 };
@@ -101,9 +101,9 @@ async fn historical_sync(
 
 
 #[instrument(,level="debug",skip(database, client), fields(job_id = %job_id))]
-async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, client: &Client) -> anyhow::Result<()> {
+async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, client: &Client,batch_size: u32) -> anyhow::Result<()> {
     let response = client
-        .list_cctx(None, false, 10, job_id)
+        .list_cctx(None, false, batch_size, job_id)
         .instrument(tracing::debug_span!("requesting realtime cctxs"))
         .await
         .unwrap();
@@ -163,11 +163,12 @@ impl Indexer {
         let polling_interval = self.settings.polling_interval;
         let client = self.client.clone();
         let database = self.database.clone();
+        let batch_size = self.settings.realtime_fetch_batch_size;
         tokio::spawn(async move {
             
             loop {
                 let job_id = Uuid::new_v4();
-                realtime_fetch(job_id, database.clone(), &client)
+                realtime_fetch(job_id, database.clone(), &client, batch_size)
                 .await
                 .unwrap();
                 tokio::time::sleep(Duration::from_millis(polling_interval)).await;
@@ -207,7 +208,7 @@ impl Indexer {
 
                 let watermarks = watermark::Entity::find()
                     .filter(watermark::Column::Kind.eq(Kind::Realtime))
-                    .filter(watermark::Column::Lock.eq(false))
+                    .filter(watermark::Column::Status.eq(ProcessingStatus::Unlocked))
                     .all(db.as_ref())
                     .await
                     .unwrap();
@@ -216,7 +217,7 @@ impl Indexer {
                     //update watermark lock to true
                     watermark::Entity::update(watermark::ActiveModel {
                         id: ActiveValue::Set(watermark.id),
-                        lock: ActiveValue::Set(true),
+                        status: ActiveValue::Set(ProcessingStatus::Locked),
                         ..Default::default()
                     })
                     .filter(watermark::Column::Id.eq(watermark.id))
@@ -237,7 +238,7 @@ impl Indexer {
                 let job_id = Uuid::new_v4();
                 let watermarks = watermark::Entity::find()
                     .filter(watermark::Column::Kind.eq(Kind::Historical))
-                    .filter(watermark::Column::Lock.eq(false))
+                    .filter(watermark::Column::Status.eq(ProcessingStatus::Unlocked))
                     .one(db.as_ref())
                     .instrument(tracing::debug_span!("looking for historical watermark",job_id = %job_id))
                     .await

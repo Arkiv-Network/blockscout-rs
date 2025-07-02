@@ -1,4 +1,4 @@
-use crate::sea_orm_active_enums::{CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, ProtocolContractVersion, TxFinalizationStatus, Kind};
+use crate::sea_orm_active_enums::{CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, Kind, ProtocolContractVersion, TxFinalizationStatus, ProcessingStatus};
 
 impl TryFrom<String> for TxFinalizationStatus {
     type Error = String;
@@ -189,6 +189,18 @@ impl TryFrom<String> for ProtocolContractVersion {
             "V1" => Ok(ProtocolContractVersion::V1),
             "V2" => Ok(ProtocolContractVersion::V2),
             _ => Err(format!("Invalid ProtocolContractVersion: {}", value)),
+        }
+    }
+}
+
+impl TryFrom<String> for ProcessingStatus {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "locked" => Ok(ProcessingStatus::Locked),
+            "unlocked" => Ok(ProcessingStatus::Unlocked),
+            "failed" => Ok(ProcessingStatus::Failed),
+            _ => Err(format!("Invalid ProcessingStatus: {}", value)),
         }
     }
 }

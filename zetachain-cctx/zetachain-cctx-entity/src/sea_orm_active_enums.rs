@@ -61,6 +61,16 @@ pub enum Kind {
     Historical,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "processing_status")]
+pub enum ProcessingStatus {
+    #[sea_orm(string_value = "locked")]
+    Locked,
+    #[sea_orm(string_value = "unlocked")]
+    Unlocked,
+    #[sea_orm(string_value = "failed")]
+    Failed,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(
     rs_type = "String",
     db_type = "Enum",
