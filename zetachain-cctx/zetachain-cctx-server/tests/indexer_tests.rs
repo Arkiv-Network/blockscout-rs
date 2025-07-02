@@ -216,6 +216,7 @@ async fn test_status_update() {
     assert_eq!(cctx.unwrap().status, OutboundMined);
 }
 
+use blockscout_service_launcher::tracing::init_logs;
 #[tokio::test]
 async fn test_parse_historical_data() {
     let db = crate::helpers::init_db("test", "indexer_parse_historical_data").await;
@@ -295,8 +296,10 @@ async fn test_parse_historical_data() {
         .unwrap();
     let indexer = Indexer::new(
         IndexerSettings {
-            polling_interval: 100, // Fast polling for tests
+            polling_interval: 500, // Fast polling for tests
             concurrency: 10,
+            realtime_fetch_batch_size:1,
+            status_update_batch_size: 1,
             ..Default::default()
         },
         db.client().clone(),
@@ -304,6 +307,10 @@ async fn test_parse_historical_data() {
         Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
     );
 
+    blockscout_service_launcher::tracing::init_logs("test_parse_historical_data", &blockscout_service_launcher::tracing::TracingSettings{
+        enabled: true,
+        ..Default::default()
+    }, &blockscout_service_launcher::tracing::JaegerSettings::default()).unwrap();
     // Run indexer for a short time to process historical data
     let indexer_handle = tokio::spawn(async move {
         let _ = indexer.run().await;

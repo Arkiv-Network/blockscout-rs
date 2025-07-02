@@ -26,8 +26,8 @@ impl Default for IndexerSettings {
             concurrency: default_concurrency(), 
             polling_interval: 1000,
             historical_batch_size: 100,
-            status_update_batch_size: 100,
-            realtime_fetch_batch_size: 100,
+            status_update_batch_size: 10,
+            realtime_fetch_batch_size: 10,
         }
     }
 }
