@@ -307,10 +307,6 @@ async fn test_parse_historical_data() {
         Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
     );
 
-    blockscout_service_launcher::tracing::init_logs("test_parse_historical_data", &blockscout_service_launcher::tracing::TracingSettings{
-        enabled: true,
-        ..Default::default()
-    }, &blockscout_service_launcher::tracing::JaegerSettings::default()).unwrap();
     // Run indexer for a short time to process historical data
     let indexer_handle = tokio::spawn(async move {
         let _ = indexer.run().await;
