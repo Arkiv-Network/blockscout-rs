@@ -188,7 +188,9 @@ impl Indexer {
         let status_update_stream = Box::pin(async_stream::stream! {
             loop {
 
+                
                 let job_id = Uuid::new_v4();
+                println!("job_id: {}", job_id);
                 let cctxs = self.database.query_cctxs_for_status_update(status_update_batch_size, job_id).await.unwrap();
                 if cctxs.is_empty() {
                     tracing::debug!("job_id: {} no cctxs to update", job_id);

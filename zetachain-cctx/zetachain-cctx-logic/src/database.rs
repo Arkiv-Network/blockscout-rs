@@ -141,42 +141,42 @@ impl ZetachainCctxDatabase {
         children_cctxs: Vec<CrossChainTx>,
         cctx: CrossChainTxEntity::Model,
     ) -> anyhow::Result<()> {
-        let cctx_status = self.get_cctx_status(cctx.id).await?;
-        let children_results = self.get_cctx_ids_by_index(children_cctxs).await?;
-        let children_ids: Vec<i32> = children_results
-            .into_iter()
-            .filter_map(|(_, id)| id)
-            .collect();
-        let tx = self.db.begin().await?;
+        // let cctx_status = self.get_cctx_status(cctx.id).await?;
+        // let children_results = self.get_cctx_ids_by_index(children_cctxs).await?;
+        // let children_ids: Vec<i32> = children_results
+        //     .into_iter()
+        //     .filter_map(|(_, id)| id)
+        //     .collect();
+        // let tx = self.db.begin().await?;
 
-        let new_root_id = cctx.root_id.unwrap_or(cctx.id);
-        if !children_ids.is_empty() {
-            let mut frontier = children_ids;
-            let mut current_depth = cctx.depth + 1;
+        // let new_root_id = cctx.root_id.unwrap_or(cctx.id);
+        // if !children_ids.is_empty() {
+        //     let mut frontier = children_ids;
+        //     let mut current_depth = cctx.depth + 1;
 
-            loop {
-                let new_frontier = self.get_cctx_ids_by_parent_id(frontier.clone()).await?;
-                if new_frontier.is_empty() {
-                    break;
-                }
-                self.update_cctx_tree_relationships(frontier, new_root_id, current_depth, &tx)
-                    .await?;
-                frontier = new_frontier;
-                current_depth += 1;
-            }
-        }
-        // If the cctx is mined, there is no need to do any additional requests
-        if cctx_status.status == CctxStatusStatus::OutboundMined {
-            self.mark_cctx_tree_processed(cctx.id, &tx).await?;
-            tracing::debug!(
-                "No children found for CCTX {}, marked as processed",
-                cctx.index
-            );
-        // If cctx is not in the final state, we might get something new in the future, so we will check again later
-        } else {
-            self.update_last_status_update_timestamp(cctx.id).await?;
-        }
-        tx.commit().await?;
+        //     loop {
+        //         let new_frontier = self.get_cctx_ids_by_parent_id(frontier.clone()).await?;
+        //         if new_frontier.is_empty() {
+        //             break;
+        //         }
+        //         self.update_cctx_tree_relationships(frontier, new_root_id, current_depth, &tx)
+        //             .await?;
+        //         frontier = new_frontier;
+        //         current_depth += 1;
+        //     }
+        // }
+        // // If the cctx is mined, there is no need to do any additional requests
+        // if cctx_status.status == CctxStatusStatus::OutboundMined {
+        //     self.mark_cctx_tree_processed(cctx.id, &tx).await?;
+        //     tracing::debug!(
+        //         "No children found for CCTX {}, marked as processed",
+        //         cctx.index
+        //     );
+        // // If cctx is not in the final state, we might get something new in the future, so we will check again later
+        // } else {
+        //     self.update_last_status_update_timestamp(cctx.id).await?;
+        // }
+        // tx.commit().await?;
         Ok(())
     }
 
@@ -644,6 +644,7 @@ pub async fn historical_sync(
         let statement = Statement::from_sql_and_values(DbBackend::Postgres, statement, vec![]);
 
         let rows: Vec<(i32, String)> = self.db.query_all(statement).await?.into_iter().map(|r| (r.try_get_by_index(0).unwrap(), r.try_get_by_index(1).unwrap())).collect();
+        println!("query completed, rows: {:?}", rows);
         Ok(rows)
     }
 
