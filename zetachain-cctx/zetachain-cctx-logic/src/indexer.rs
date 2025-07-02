@@ -2,18 +2,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Ok;
+use futures::future::join;
 
-use tokio::join;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 use crate::database::ZetachainCctxDatabase;
 use crate::models::PagedCCTXResponse;
-use zetachain_cctx_entity::sea_orm_active_enums::{CctxStatusStatus, Kind, ProcessingStatus};
+use zetachain_cctx_entity::sea_orm_active_enums::{Kind, ProcessingStatus};
 use zetachain_cctx_entity::{
-    cctx_status, cross_chain_tx, watermark
+    cross_chain_tx, watermark
 };
 
-use sea_orm::{ColumnTrait, DatabaseTransaction};
+use sea_orm::ColumnTrait;
 
 use crate::{client::Client, settings::IndexerSettings};
 use futures::StreamExt;
@@ -32,21 +32,22 @@ pub struct Indexer {
 }
 
 enum IndexerJob {
-    StatusUpdate(cross_chain_tx::Model, Uuid),             //cctx index and id to be updated
+    StatusUpdate(String, i32, Uuid),             //cctx index and id to be updated
     GapFill(watermark::Model, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
     HistoricalDataFetch(watermark::Model, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
     FindRelated(cross_chain_tx::Model, Uuid), // Tree traversal job for CCTX parent-child relationships
 }
 
-
+#[instrument(,level="info",skip(database, client), fields(job_id = %job_id, cctx_index = %cctx_index))]
 async fn update_cctx_status(
     job_id: Uuid,
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
-    existing_cctx: cross_chain_tx::Model,
+    cctx_index: String,
+    cctx_id: i32
 ) -> anyhow::Result<()> {
-    let fetched_cctx = client.get_cctx(&existing_cctx.index).await?;
-    database.update_cctx_status(job_id, existing_cctx, fetched_cctx).await.map_err(|e| anyhow::anyhow!(e))?;
+    let fetched_cctx = client.fetch_cctx(&cctx_index, job_id).await?;
+    database.update_cctx_status(job_id, cctx_id, fetched_cctx).await.map_err(|e| anyhow::anyhow!(e))?;
     Ok(())
 }
 
@@ -61,7 +62,7 @@ async fn gap_fill(
     let PagedCCTXResponse { cross_chain_tx : cctxs, pagination } = client.list_cctx(Some(&watermark.pointer), false, batch_size,job_id).await.unwrap();
     
     let earliest_cctx = cctxs.last().unwrap();
-    let last_synced_cctx = database.get_cctx(earliest_cctx.index.clone()).await?;
+    let last_synced_cctx = database.query_cctx(earliest_cctx.index.clone()).await?;
 
     if last_synced_cctx.is_some() {
         tracing::debug!("last synced cctx {} is present, skipping", earliest_cctx.index);
@@ -104,7 +105,6 @@ async fn historical_sync(
 async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, client: &Client,batch_size: u32) -> anyhow::Result<()> {
     let response = client
         .list_cctx(None, false, batch_size, job_id)
-        .instrument(tracing::debug_span!("requesting realtime cctxs"))
         .await
         .unwrap();
     let txs = response.cross_chain_tx;
@@ -121,7 +121,7 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
 
 
 
-#[instrument(,level="debug",skip(database, client), fields(job_id = %job_id, cctx_index = %cctx.index))]
+#[instrument(,level="debug",skip(database, client,cctx), fields(job_id = %job_id, cctx_index = %cctx.index))]
 async fn update_cctx_relations(
     job_id: Uuid,
     database: Arc<ZetachainCctxDatabase>,
@@ -193,8 +193,8 @@ impl Indexer {
                 if cctxs.is_empty() {
                     tracing::debug!("job_id: {} no cctxs to update", job_id);
                 }
-                for cctx in cctxs {
-                    yield IndexerJob::StatusUpdate(cctx, job_id);
+                for (cctx_id, cctx_index) in cctxs {
+                    yield IndexerJob::StatusUpdate(cctx_index, cctx_id, job_id);
                 }
                 tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
                 
@@ -208,7 +208,7 @@ impl Indexer {
 
                 let watermarks = watermark::Entity::find()
                     .filter(watermark::Column::Kind.eq(Kind::Realtime))
-                    .filter(watermark::Column::Status.eq(ProcessingStatus::Unlocked))
+                    .filter(watermark::Column::ProcessingStatus.eq(ProcessingStatus::Unlocked))
                     .all(db.as_ref())
                     .await
                     .unwrap();
@@ -217,7 +217,7 @@ impl Indexer {
                     //update watermark lock to true
                     watermark::Entity::update(watermark::ActiveModel {
                         id: ActiveValue::Set(watermark.id),
-                        status: ActiveValue::Set(ProcessingStatus::Locked),
+                        processing_status: ActiveValue::Set(ProcessingStatus::Locked),
                         ..Default::default()
                     })
                     .filter(watermark::Column::Id.eq(watermark.id))
@@ -238,7 +238,7 @@ impl Indexer {
                 let job_id = Uuid::new_v4();
                 let watermarks = watermark::Entity::find()
                     .filter(watermark::Column::Kind.eq(Kind::Historical))
-                    .filter(watermark::Column::Status.eq(ProcessingStatus::Unlocked))
+                    .filter(watermark::Column::ProcessingStatus.eq(ProcessingStatus::Unlocked))
                     .one(db.as_ref())
                     .instrument(tracing::debug_span!("looking for historical watermark",job_id = %job_id))
                     .await
@@ -266,7 +266,7 @@ impl Indexer {
                 // Find CCTXs that haven't been processed for tree traversal
                 let unprocessed_cctxs = cross_chain_tx::Entity::find()
                     .filter(cross_chain_tx::Column::TreeQueryFlag.eq(false))
-                    .filter(cross_chain_tx::Column::Lock.eq(false))
+                    .filter(cross_chain_tx::Column::ProcessingStatus.eq(ProcessingStatus::Unlocked))
                     .limit(tree_batch_size as u64)
                     .all(db.as_ref())
                     .await
@@ -279,7 +279,7 @@ impl Indexer {
                         // Lock the CCTX to prevent concurrent processing
                         cross_chain_tx::Entity::update(cross_chain_tx::ActiveModel {
                             id: ActiveValue::Set(cctx.id),
-                            lock: ActiveValue::Set(true),
+                            processing_status: ActiveValue::Set(ProcessingStatus::Locked),
                             ..Default::default()
                         })
                         .filter(cross_chain_tx::Column::Id.eq(cctx.id))
@@ -317,9 +317,8 @@ impl Indexer {
                 let gap_fill_batch_size = self.settings.realtime_fetch_batch_size;
                 tokio::spawn(async move {
                     match job {
-                        IndexerJob::StatusUpdate(existing_cctx, job_id) => {
-                            let cctx_id = existing_cctx.id;
-                            if let Err(e) =    update_cctx_status(job_id, database.clone(), &client, existing_cctx)
+                        IndexerJob::StatusUpdate(cctx_index, cctx_id, job_id) => {
+                            if let Err(e) =  update_cctx_status(job_id, database.clone(), &client, cctx_index, cctx_id)
                             .await {
                                 tracing::error!(error = %e, job_id = %job_id, "Failed to update cctx status");
                                 database.unlock_cctx(cctx_id).await.unwrap();
@@ -344,7 +343,7 @@ impl Indexer {
                 });
                 futures::future::ready(())
             });
-        join!(realtime_handler, streaming).0.map_err(anyhow::Error::from)
+        join(realtime_handler, streaming).await.0.map_err(anyhow::Error::from)
         
     
     }

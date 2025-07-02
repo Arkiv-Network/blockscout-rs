@@ -9,7 +9,7 @@ use governor::{
 use reqwest::{Method, Request, Response, Url};
 use serde::Deserialize;
 use tokio::time::timeout;
-use tracing::Instrument;
+use tracing::{instrument, Instrument};
 use uuid::Uuid;
 
 use crate::models::{CCTXResponse, CrossChainTx, InboundHashToCctxResponse, PagedCCTXResponse};
@@ -45,7 +45,8 @@ pub struct Client {
 }
 
 impl Client {
-    async fn make_request(&self, request: Request) -> anyhow::Result<Response> {
+    #[instrument(level="debug",skip(self, request), fields( job_id = %job_id, url = ?request.url().as_str()))]
+    async fn make_request(&self, request: Request,job_id: Uuid) -> anyhow::Result<Response> {
         for attempt in 1..=self.settings.num_of_retries {
             let permit = timeout(
                 Duration::from_millis(self.settings.retry_delay_ms.into()),
@@ -63,6 +64,7 @@ impl Client {
                 }
                 Err(_) => {
                     tracing::warn!(
+                        request = ?request.url(),
                         attempt,
                         MAX_RETRIES =? self.settings.num_of_retries,
                         "Rate limiter wait timed out, retrying..."
@@ -77,12 +79,12 @@ impl Client {
         ))
     }
 
-    pub async fn get_cctx(&self, index: &str) -> anyhow::Result<CrossChainTx> {
+    #[instrument(skip(self, index), fields(job_id = %job_id))]
+    pub async fn fetch_cctx(&self, index: &str, job_id: Uuid) -> anyhow::Result<CrossChainTx> {
         let mut url: Url = self.settings.url.parse().unwrap();
-        url.set_path("/crosschain/cctx");
-        url.set_fragment(Some(index));
+        url.set_path(&format!("{}/crosschain/cctx/{}", url.path(), index));
         let request = Request::new(Method::GET, url);
-        let response = self.make_request(request).await?.error_for_status()?;
+        let response = self.make_request(request, job_id).await?.error_for_status()?;
         let body = response.json::<CCTXResponse>().await?;
         Ok(body.cross_chain_tx)
     }
@@ -110,8 +112,7 @@ impl Client {
 
         let request = Request::new(Method::GET, url.clone());
         let response = self
-            .make_request(request)
-            .instrument(tracing::debug_span!("executing list_cctx", url = url.as_str(), job_id = %job_id))
+            .make_request(request, job_id)
             .await?
             .error_for_status()
             .map_err(|e| anyhow::anyhow!("HTTP request error: {}", e))?;
@@ -133,12 +134,11 @@ impl Client {
     ) -> Result<InboundHashToCctxResponse, Error> {
         let mut url: Url = self.settings.url.parse().unwrap();
         let path = url.path();
-        url.set_path(&format!("{}zeta-chain/crosschain/inboundHashToCctxData/{}", path, cctx_index));
+        url.set_path(&format!("{}crosschain/inboundHashToCctxData/{}", path, cctx_index));
 
         let request = Request::new(Method::GET, url.clone());
         let response = self
-            .make_request(request)
-            .instrument(tracing::debug_span!("executing get_inbound_hash_to_cctx_data", url = url.as_str(), job_id = %job_id))
+            .make_request(request, job_id)
             .await?;
 
         // Handle 404 by returning an empty result

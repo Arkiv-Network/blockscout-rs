@@ -19,6 +19,7 @@ use zetachain_cctx_entity::{
     },
     watermark,
 };
+use sea_orm::ConnectionTrait;
 
 pub struct ZetachainCctxDatabase {
     db: Arc<DatabaseConnection>,
@@ -248,7 +249,7 @@ impl ZetachainCctxDatabase {
         .map_err(|e| anyhow::anyhow!(e))?;
         Ok(())
     }
-    pub async fn get_cctx(
+    pub async fn query_cctx(
         &self,
         index: String,
     ) -> anyhow::Result<Option<CrossChainTxEntity::Model>> {
@@ -292,7 +293,7 @@ pub async fn gap_fill(
 ) -> anyhow::Result<()> {
     
     let earliest_fetched = cctxs.last().unwrap();
-    let latest_synced = self.get_cctx(earliest_fetched.index.clone()).await?;
+    let latest_synced = self.query_cctx(earliest_fetched.index.clone()).await?;
     if latest_synced.is_some() {
         tracing::debug!("last synced cctx {} is present, skipping", earliest_fetched.index);
     }  else {
@@ -316,7 +317,7 @@ pub async fn process_realtime_cctxs(
     //check whether the latest fetched cctx is present in the database
     //we fetch transaction in LIFO order
     let latest_fetched = cctxs.first().unwrap();
-    let latest_loaded = self.get_cctx(latest_fetched.index.clone()).await?;
+    let latest_loaded = self.query_cctx(latest_fetched.index.clone()).await?;
 
 
     //if latest fetched cctx is in the db that means that the upper boundary is already covered and there is no new cctxs to save
@@ -326,7 +327,7 @@ pub async fn process_realtime_cctxs(
     }
     //now we need to check the lower boudary ( the earliest of the fetched cctxs)
     let earliest_fetched = cctxs.last().unwrap();
-    let earliest_loaded = self.get_cctx(earliest_fetched.index.clone()).await?;
+    let earliest_loaded = self.query_cctx(earliest_fetched.index.clone()).await?;
     
     if earliest_loaded.is_none() {
             // the lower boundary is not covered, so there could be more transaction that happened earlier, that we haven't observed
@@ -378,7 +379,7 @@ pub async fn historical_sync(
                 id: ActiveValue::NotSet,
                 creator: ActiveValue::Set(cctx.creator.clone()),
                 index: ActiveValue::Set(cctx.index.clone()),
-                lock: ActiveValue::Set(false),
+                processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
                 zeta_fees: ActiveValue::Set(cctx.zeta_fees.clone()),
                 relayed_message: ActiveValue::Set(Some(cctx.relayed_message.clone())),
                 protocol_contract_version: ActiveValue::Set(
@@ -568,7 +569,7 @@ pub async fn historical_sync(
     pub async fn unlock_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
         let res = watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark.id),
-            status: ActiveValue::Set(ProcessingStatus::Unlocked),
+            processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
             ..Default::default()
         })
@@ -584,7 +585,7 @@ pub async fn historical_sync(
     pub async fn lock_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark.id),
-            status: ActiveValue::Set(ProcessingStatus::Locked),
+            processing_status: ActiveValue::Set(ProcessingStatus::Locked),
             ..Default::default()
         })
         .filter(watermark::Column::Id.eq(watermark.id))
@@ -607,7 +608,7 @@ pub async fn historical_sync(
     pub async fn unlock_cctx(&self, id: i32) -> anyhow::Result<()> {
         CrossChainTxEntity::Entity::update(CrossChainTxEntity::ActiveModel {
             id: ActiveValue::Unchanged(id),
-            lock: ActiveValue::Set(false),
+            processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             ..Default::default()
         })
         .filter(CrossChainTxEntity::Column::Id.eq(id))
@@ -620,7 +621,7 @@ pub async fn historical_sync(
         &self,
         batch_size: u32,
         job_id: Uuid,
-    ) -> anyhow::Result<Vec<CrossChainTxEntity::Model>> {
+    ) -> anyhow::Result<Vec<(i32, String)>> {
         let statement = format!(
             r#"
         WITH cctxs AS (
@@ -628,25 +629,22 @@ pub async fn historical_sync(
             FROM cross_chain_tx cctx
             JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
             WHERE (cs.status IN ('PendingInbound', 'PendingOutbound', 'PendingRevert') OR cctx.tree_query_flag = false)
-            AND cctx.lock = false
+            AND cctx.processing_status = 'unlocked'::processing_status
             ORDER BY cctx.last_status_update_timestamp ASC
             LIMIT {batch_size}
             FOR UPDATE SKIP LOCKED
         )
         UPDATE cross_chain_tx cctx
-        SET lock = true, last_status_update_timestamp = NOW()
+        SET processing_status = 'locked'::processing_status, last_status_update_timestamp = NOW()
         WHERE id IN (SELECT id FROM cctxs)
-        RETURNING id, index, last_status_update_timestamp, lock, creator, index, relayed_message, protocol_contract_version, zeta_fees
+        RETURNING id, index
         "#
         );
 
         let statement = Statement::from_sql_and_values(DbBackend::Postgres, statement, vec![]);
 
-        CrossChainTxEntity::Entity::find()
-            .from_raw_sql(statement)
-            .all(self.db.as_ref())
-            .await
-            .map_err(|e| anyhow::anyhow!(e))
+        let rows: Vec<(i32, String)> = self.db.query_all(statement).await?.into_iter().map(|r| (r.try_get_by_index(0).unwrap(), r.try_get_by_index(1).unwrap())).collect();
+        Ok(rows)
     }
 
     pub async fn mark_cctx_tree_processed(
@@ -670,7 +668,7 @@ pub async fn historical_sync(
         CrossChainTxEntity::Entity::update(CrossChainTxEntity::ActiveModel {
             id: ActiveValue::Set(cctx_id),
             last_status_update_timestamp: ActiveValue::Set(chrono::Utc::now().naive_utc()),
-            lock: ActiveValue::Set(false),
+            processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             ..Default::default()
         })
         .filter(CrossChainTxEntity::Column::Id.eq(cctx_id))
@@ -683,7 +681,7 @@ pub async fn historical_sync(
     pub async fn update_cctx_status(
         &self,
         job_id: Uuid,
-        cctx: CrossChainTxEntity::Model,
+        cctx_id: i32,
         fetched_cctx: CrossChainTx,
     ) -> anyhow::Result<()> {
         let outbound_params = fetched_cctx.outbound_params;
@@ -691,7 +689,7 @@ pub async fn historical_sync(
         let tx = self.db.begin().await?;
         for outbound_params in outbound_params {
             if let Some(record) = OutboundParamsEntity::Entity::find()
-                .filter(OutboundParamsEntity::Column::CrossChainTxId.eq(Some(cctx.id)))
+                .filter(OutboundParamsEntity::Column::CrossChainTxId.eq(Some(cctx_id)))
                 .filter(OutboundParamsEntity::Column::Receiver.eq(outbound_params.receiver))
                 .one(self.db.as_ref())
                 .await
@@ -716,11 +714,11 @@ pub async fn historical_sync(
         }
         //unlock cctx
         CrossChainTxEntity::Entity::update(CrossChainTxEntity::ActiveModel {
-            id: ActiveValue::Set(cctx.id),
-            lock: ActiveValue::Set(false),
+            id: ActiveValue::Set(cctx_id),
+            processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             ..Default::default()
         })
-        .filter(CrossChainTxEntity::Column::Id.eq(cctx.id))
+        .filter(CrossChainTxEntity::Column::Id.eq(cctx_id))
         .exec(&tx)
         .await?;
 
@@ -744,7 +742,7 @@ pub async fn historical_sync(
             id: ActiveValue::NotSet,
             creator: ActiveValue::Set(tx.creator),
             index: ActiveValue::Set(tx.index),
-            lock: ActiveValue::Set(false),
+            processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             zeta_fees: ActiveValue::Set(tx.zeta_fees),
             relayed_message: ActiveValue::Set(Some(tx.relayed_message)),
             protocol_contract_version: ActiveValue::Set(
