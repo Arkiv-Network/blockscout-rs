@@ -79,17 +79,18 @@ impl Client {
         ))
     }
 
-    #[instrument(skip(self, index), fields(job_id = %job_id))]
+    #[instrument(skip_all)]
     pub async fn fetch_cctx(&self, index: &str, job_id: Uuid) -> anyhow::Result<CrossChainTx> {
         let mut url: Url = self.settings.url.parse().unwrap();
-        url.set_path(&format!("{}/crosschain/cctx/{}", url.path(), index));
+        url.set_path(&format!("{}crosschain/cctx/{}", url.path(), index));
         let request = Request::new(Method::GET, url);
         let response = self.make_request(request, job_id).await?.error_for_status()?;
         let body = response.json::<CCTXResponse>().await?;
         Ok(body.cross_chain_tx)
     }
 
-    pub async fn list_cctx(
+    #[instrument(skip_all, fields(job_id = %job_id))]
+    pub async fn list_cctxs(
         &self,
         pagination_key: Option<&str>,
         unordered: bool,

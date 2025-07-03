@@ -9,7 +9,7 @@ zetachain-cctx-entity = { path = "../zetachain-cctx-entity" }
 anyhow = "1.0"
 blockscout-display-bytes = "1.0"
 tracing = "0.1"
-uuid = "1.13"
+uuid = { version = "1.13", features = ["v4"] }
 
 sea-orm = { workspace = true, features = [
     "sqlx-postgres",

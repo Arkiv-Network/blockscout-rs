@@ -341,7 +341,8 @@ pub async fn process_realtime_cctxs(
     tx.commit().await?;
     Ok(())
 }
-pub async fn historical_sync(
+#[instrument(level="info",skip_all)]
+pub async fn import_cctxs(
     &self,
     job_id: Uuid,
     cctxs: Vec<CrossChainTx>,
@@ -644,7 +645,6 @@ pub async fn historical_sync(
         let statement = Statement::from_sql_and_values(DbBackend::Postgres, statement, vec![]);
 
         let rows: Vec<(i32, String)> = self.db.query_all(statement).await?.into_iter().map(|r| (r.try_get_by_index(0).unwrap(), r.try_get_by_index(1).unwrap())).collect();
-        println!("query completed, rows: {:?}", rows);
         Ok(rows)
     }
 
@@ -678,7 +678,7 @@ pub async fn historical_sync(
         Ok(())
     }
 
-    #[instrument(,level="debug",skip(self), fields(job_id = %job_id))]
+    #[instrument(,level="info",skip_all, fields(job_id = %job_id))]
     pub async fn update_cctx_status(
         &self,
         job_id: Uuid,
@@ -713,6 +713,25 @@ pub async fn historical_sync(
                 .await?;
             }
         }
+
+        if let Some(cctx_status_row) = cctx_status::Entity::find()
+            .filter(cctx_status::Column::CrossChainTxId.eq(cctx_id))
+            .one(self.db.as_ref())
+            .await? {
+                cctx_status::Entity::update(cctx_status::ActiveModel {
+                    id: ActiveValue::Set(cctx_status_row.id),
+                    status: ActiveValue::Set(CctxStatusStatus::try_from(fetched_cctx.cctx_status.status.clone())
+                        .map_err(|e| anyhow::anyhow!(e))?
+                    ),
+                    last_update_timestamp: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+                    ..Default::default()
+                })
+                .filter(cctx_status::Column::Id.eq(cctx_status_row.id))
+                .exec(self.db.as_ref())
+                .await?;
+            }
+
+        
         //unlock cctx
         CrossChainTxEntity::Entity::update(CrossChainTxEntity::ActiveModel {
             id: ActiveValue::Set(cctx_id),

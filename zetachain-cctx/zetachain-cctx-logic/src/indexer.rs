@@ -39,7 +39,7 @@ enum IndexerJob {
 }
 
 #[instrument(,level="info",skip(database, client), fields(job_id = %job_id, cctx_index = %cctx_index))]
-async fn update_cctx_status(
+async fn refresh_cctx_status(
     job_id: Uuid,
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -59,7 +59,7 @@ async fn gap_fill(
     watermark: watermark::Model,
     batch_size: u32,
 ) -> anyhow::Result<()> {
-    let PagedCCTXResponse { cross_chain_tx : cctxs, pagination } = client.list_cctx(Some(&watermark.pointer), false, batch_size,job_id).await.unwrap();
+    let PagedCCTXResponse { cross_chain_tx : cctxs, pagination } = client.list_cctxs(Some(&watermark.pointer), false, batch_size,job_id).await.unwrap();
     
     let earliest_cctx = cctxs.last().unwrap();
     let last_synced_cctx = database.query_cctx(earliest_cctx.index.clone()).await?;
@@ -76,7 +76,7 @@ async fn gap_fill(
 
 
 
-#[instrument(,level="trace",skip(database, client), fields(job_id = %job_id))]
+#[instrument(,level="info",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
 async fn historical_sync(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -85,8 +85,7 @@ async fn historical_sync(
     batch_size: u32,
 ) -> anyhow::Result<()> {
     let response = client
-        .list_cctx(Some(&watermark.pointer), true, batch_size,job_id)
-        .instrument( tracing::debug_span!("fetching historical data from node", job_id = %job_id))
+        .list_cctxs(Some(&watermark.pointer), true, batch_size,job_id)
         .await?;
     let cross_chain_txs = response.cross_chain_tx;
     if cross_chain_txs.is_empty() {
@@ -95,16 +94,16 @@ async fn historical_sync(
     }
     let next_key = response.pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
     //atomically insert cctxs and update watermark
-    database.historical_sync(job_id, cross_chain_txs, &next_key, watermark).await?;
+    database.import_cctxs(job_id, cross_chain_txs, &next_key, watermark).await?;
     Ok(())
 }
 
 
 
-#[instrument(,level="debug",skip(database, client), fields(job_id = %job_id))]
+#[instrument(,level="info",skip(database, client), fields(job_id = %job_id))]
 async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, client: &Client,batch_size: u32) -> anyhow::Result<()> {
     let response = client
-        .list_cctx(None, false, batch_size, job_id)
+        .list_cctxs(None, false, batch_size, job_id)
         .await
         .unwrap();
     let txs = response.cross_chain_tx;
@@ -190,7 +189,6 @@ impl Indexer {
 
                 
                 let job_id = Uuid::new_v4();
-                println!("job_id: {}", job_id);
                 let cctxs = self.database.query_cctxs_for_status_update(status_update_batch_size, job_id).await.unwrap();
                 if cctxs.is_empty() {
                     tracing::debug!("job_id: {} no cctxs to update", job_id);
@@ -320,7 +318,7 @@ impl Indexer {
                 tokio::spawn(async move {
                     match job {
                         IndexerJob::StatusUpdate(cctx_index, cctx_id, job_id) => {
-                            if let Err(e) =  update_cctx_status(job_id, database.clone(), &client, cctx_index, cctx_id)
+                            if let Err(e) =  refresh_cctx_status(job_id, database.clone(), &client, cctx_index, cctx_id)
                             .await {
                                 tracing::error!(error = %e, job_id = %job_id, "Failed to update cctx status");
                                 database.unlock_cctx(cctx_id).await.unwrap();
