@@ -9,8 +9,7 @@ use governor::{
 use reqwest::{Method, Request, Response, Url};
 use serde::Deserialize;
 use tokio::time::timeout;
-use tracing::{instrument, Instrument};
-use uuid::Uuid;
+use tracing::instrument;
 
 use crate::models::{CCTXResponse, CrossChainTx, InboundHashToCctxResponse, PagedCCTXResponse};
 
@@ -45,8 +44,8 @@ pub struct Client {
 }
 
 impl Client {
-    #[instrument(level="debug",skip(self, request), fields( job_id = %job_id, url = ?request.url().as_str()))]
-    async fn make_request(&self, request: Request,job_id: Uuid) -> anyhow::Result<Response> {
+    #[instrument(level="debug",skip(self, request), fields( url = ?request.url().as_str()))]
+    async fn make_request(&self, request: Request) -> anyhow::Result<Response> {
         for attempt in 1..=self.settings.num_of_retries {
             let permit = timeout(
                 Duration::from_millis(self.settings.retry_delay_ms.into()),
@@ -80,22 +79,21 @@ impl Client {
     }
 
     #[instrument(skip_all)]
-    pub async fn fetch_cctx(&self, index: &str, job_id: Uuid) -> anyhow::Result<CrossChainTx> {
+    pub async fn fetch_cctx(&self, index: &str) -> anyhow::Result<CrossChainTx> {
         let mut url: Url = self.settings.url.parse().unwrap();
         url.set_path(&format!("{}crosschain/cctx/{}", url.path(), index));
         let request = Request::new(Method::GET, url);
-        let response = self.make_request(request, job_id).await?.error_for_status()?;
+        let response = self.make_request(request).await?.error_for_status()?;
         let body = response.json::<CCTXResponse>().await?;
         Ok(body.cross_chain_tx)
     }
 
-    #[instrument(skip_all, fields(job_id = %job_id))]
+    #[instrument(skip_all)]
     pub async fn list_cctxs(
         &self,
         pagination_key: Option<&str>,
         unordered: bool,
-        batch_size: u32,
-        job_id: Uuid,
+        batch_size: u32
     ) -> Result<PagedCCTXResponse, Error> {
         let mut url: Url = self.settings.url.parse().unwrap();
         let path = url.path();
@@ -113,7 +111,7 @@ impl Client {
 
         let request = Request::new(Method::GET, url.clone());
         let response = self
-            .make_request(request, job_id)
+            .make_request(request)
             .await?
             .error_for_status()
             .map_err(|e| anyhow::anyhow!("HTTP request error: {}", e))?;
@@ -128,10 +126,10 @@ impl Client {
         Ok(body)
     }
 
+    #[instrument(level="debug",skip_all)]
     pub async fn get_inbound_hash_to_cctx_data(
         &self,
         cctx_index: &str,
-        job_id: Uuid,
     ) -> Result<InboundHashToCctxResponse, Error> {
         let mut url: Url = self.settings.url.parse().unwrap();
         let path = url.path();
@@ -139,7 +137,7 @@ impl Client {
 
         let request = Request::new(Method::GET, url.clone());
         let response = self
-            .make_request(request, job_id)
+            .make_request(request)
             .await?;
 
         // Handle 404 by returning an empty result

@@ -5633,6 +5633,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tracing",
+ "uuid",
  "wiremock",
  "zetachain-cctx-entity",
  "zetachain-cctx-logic",

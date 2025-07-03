@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::models::{self, CrossChainTx};
+use crate::models::{self, CctxShort, CrossChainTx};
 use anyhow::Ok;
 use chrono::Utc;
 use sea_orm::{
@@ -139,7 +139,7 @@ impl ZetachainCctxDatabase {
     pub async fn traverse_and_update_tree_relationships(
         &self,
         children_cctxs: Vec<CrossChainTx>,
-        cctx: CrossChainTxEntity::Model,
+        cctx: &CctxShort,
     ) -> anyhow::Result<()> {
         let cctx_status = self.get_cctx_status(cctx.id).await?;
         let children_results = self.get_cctx_ids_by_index(children_cctxs).await?;
@@ -208,6 +208,7 @@ impl ZetachainCctxDatabase {
                 created_at: ActiveValue::Set(Utc::now().naive_utc()),
                 updated_at: ActiveValue::Set(Utc::now().naive_utc()),
                 id: ActiveValue::NotSet,
+                updated_by: ActiveValue::Set("test".to_string()),
             })
             .exec(self.db.as_ref())
             .await?;
@@ -229,7 +230,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(level="debug",skip_all)]
+    #[instrument(skip(self,tx,watermark),level="debug",fields(watermark_id = %watermark.id, new_pointer = %new_pointer))]
     pub async fn move_watermark(
         &self,
         watermark: watermark::Model,
@@ -262,7 +263,7 @@ impl ZetachainCctxDatabase {
     }
 
     #[instrument(level="debug",skip_all)]
-    pub async fn create_realtime_watermark(&self, pointer: String) -> anyhow::Result<()> {
+    pub async fn create_realtime_watermark(&self, pointer: String,job_id: Uuid) -> anyhow::Result<()> {
         watermark::Entity::insert(watermark::ActiveModel {
             id: ActiveValue::NotSet,
             kind: ActiveValue::Set(Kind::Realtime),
@@ -270,6 +271,7 @@ impl ZetachainCctxDatabase {
             processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
             updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+            updated_by: ActiveValue::Set(job_id.to_string()),
         })
         .exec(self.db.as_ref())
         .instrument(tracing::debug_span!("creating new realtime watermark"))
@@ -281,7 +283,7 @@ impl ZetachainCctxDatabase {
 
 
     #[instrument(,level="info",skip(self,watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
-pub async fn gap_fill(
+pub async fn level_data_gap(
     self: &ZetachainCctxDatabase,
     job_id: Uuid,
     
@@ -333,7 +335,7 @@ pub async fn process_realtime_cctxs(
             // the lower boundary is not covered, so there could be more transaction that happened earlier, that we haven't observed
             //we have to save current pointer to continue fetching until we hit a known transaction
             tracing::debug!("earliest cctx not found, creating new realtime watermark {}", next_key);
-            self.create_realtime_watermark(next_key.to_owned()).await?;
+            self.create_realtime_watermark(next_key.to_owned(),job_id).await?;
     } 
 
     self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
@@ -356,7 +358,7 @@ pub async fn import_cctxs(
     Ok(())
 }
     /// Batch insert multiple CrossChainTx records with their child entities
-    #[instrument(,level="debug",skip(self, transactions), fields(job_id = %job_id))]
+    #[instrument( skip_all,level="debug")]
     pub async fn batch_insert_transactions(
         &self,
         job_id: Uuid,
@@ -566,12 +568,13 @@ pub async fn import_cctxs(
         Ok(())
     }
 
-    #[instrument(,level="debug",skip(self), fields(watermark_id = %watermark.id))]
-    pub async fn unlock_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
+    #[instrument(,level="debug",skip(self,job_id,watermark), fields(watermark_id = %watermark.id))]
+    pub async fn unlock_watermark(&self, watermark: watermark::Model,job_id: Uuid) -> anyhow::Result<()> {
         let res = watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark.id),
             processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+            updated_by: ActiveValue::Set(job_id.to_string()),
             ..Default::default()
         })
         .filter(watermark::Column::Id.eq(watermark.id))
@@ -583,10 +586,13 @@ pub async fn import_cctxs(
         Ok(())
     }
 
-    pub async fn lock_watermark(&self, watermark: watermark::Model) -> anyhow::Result<()> {
+    #[instrument(,level="debug",skip(self,job_id), fields(watermark_id = %watermark.id))]
+    pub async fn lock_watermark(&self, watermark: watermark::Model,job_id: Uuid) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark.id),
             processing_status: ActiveValue::Set(ProcessingStatus::Locked),
+            updated_by: ActiveValue::Set(job_id.to_string()),
+            updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
             ..Default::default()
         })
         .filter(watermark::Column::Id.eq(watermark.id))
@@ -622,7 +628,7 @@ pub async fn import_cctxs(
         &self,
         batch_size: u32,
         job_id: Uuid,
-    ) -> anyhow::Result<Vec<(i32, String)>> {
+    ) -> anyhow::Result<Vec<CctxShort>> {
         let statement = format!(
             r#"
         WITH cctxs AS (
@@ -638,15 +644,25 @@ pub async fn import_cctxs(
         UPDATE cross_chain_tx cctx
         SET processing_status = 'locked'::processing_status, last_status_update_timestamp = NOW()
         WHERE id IN (SELECT id FROM cctxs)
-        RETURNING id, index
+        RETURNING id, index, root_id, depth
         "#
         );
 
         let statement = Statement::from_sql_and_values(DbBackend::Postgres, statement, vec![]);
 
-        let rows: Vec<(i32, String)> = self.db.query_all(statement).await?.into_iter().map(|r| (r.try_get_by_index(0).unwrap(), r.try_get_by_index(1).unwrap())).collect();
-        Ok(rows)
-    }
+        let cctxs: Result<Vec<CctxShort>, sea_orm::DbErr> = self.db.query_all(statement).await?.iter()
+            .map(|r| {
+                std::result::Result::Ok(CctxShort {
+                    id: r.try_get_by_index(0)?,
+                    index: r.try_get_by_index(1)?,
+                    root_id: r.try_get_by_index(2)?,
+                    depth: r.try_get_by_index(3)?,
+                })
+            })
+            .collect::<Result<Vec<CctxShort>, sea_orm::DbErr>>();
+
+        cctxs.map_err(|e| anyhow::anyhow!(e))
+        }
 
     pub async fn mark_cctx_tree_processed(
         &self,
@@ -678,10 +694,9 @@ pub async fn import_cctxs(
         Ok(())
     }
 
-    #[instrument(,level="info",skip_all, fields(job_id = %job_id))]
+    #[instrument(,level="debug",skip_all)]
     pub async fn update_cctx_status(
         &self,
-        job_id: Uuid,
         cctx_id: i32,
         fetched_cctx: CrossChainTx,
     ) -> anyhow::Result<()> {
@@ -747,7 +762,7 @@ pub async fn import_cctxs(
 
         Ok(())
     }
-    #[instrument(,level="debug",skip(self, tx), fields(job_id = %job_id))]
+    #[instrument(,level="debug",skip(self, tx))]
     pub async fn insert_transaction_with_tree_relationships(
         &self,
         tx: CrossChainTx,

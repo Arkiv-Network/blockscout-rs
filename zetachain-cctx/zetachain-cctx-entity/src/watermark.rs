@@ -14,6 +14,7 @@ pub struct Model {
     pub processing_status: ProcessingStatus,
     pub created_at: DateTime,
     pub updated_at: DateTime,
+    pub updated_by: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -8,6 +8,7 @@ use pretty_assertions::assert_eq;
 use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter};
 use sea_orm::{ConnectionTrait, PaginatorTrait};
 use serde_json::json;
+use uuid::Uuid;
 use wiremock::matchers::path_regex;
 use wiremock::{
     matchers::{method, path, query_param},
@@ -29,8 +30,20 @@ use zetachain_cctx_logic::{
 };
 
 
+async fn init_tests_logs(){
+    blockscout_service_launcher::tracing::init_logs("tests", &blockscout_service_launcher::tracing::TracingSettings{
+        enabled: true,
+        ..Default::default()
+    }, &blockscout_service_launcher::tracing::JaegerSettings::default()).unwrap();
+}
+
 #[tokio::test]
 async fn test_historical_sync_updates_pointer() {
+
+    //if env var TRACING=true then call init_tests_logs()
+    if std::env::var("TEST_TRACING").unwrap_or_default() == "true" {
+        init_tests_logs().await;
+    }
     let db = crate::helpers::init_db("test", "historical_sync_updates_pointer").await;
 
     // Setup mock server
@@ -69,6 +82,7 @@ async fn test_historical_sync_updates_pointer() {
         processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        updated_by: ActiveValue::Set("test".to_string()),
     };
 
     watermark::Entity::insert(watermark_model)
@@ -92,7 +106,7 @@ async fn test_historical_sync_updates_pointer() {
     // Run indexer for a short time to process historical data
     let indexer_handle = tokio::spawn(async move {
         // Run for a limited time to avoid infinite loop
-        let timeout_duration = Duration::from_secs(5);
+        let timeout_duration = Duration::from_secs(4);
         tokio::time::timeout(timeout_duration, async {
             let _ = indexer.run().await;
         })
@@ -103,7 +117,7 @@ async fn test_historical_sync_updates_pointer() {
     });
 
     // Wait for indexer to process
-    tokio::time::sleep(Duration::from_millis(2000)).await;
+    tokio::time::sleep(Duration::from_millis(5000)).await;
 
     // Cancel the indexer
     indexer_handle.abort();
@@ -116,7 +130,8 @@ async fn test_historical_sync_updates_pointer() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(final_watermark.pointer, "end");
+    println!("final_watermark.pointer: {:?} ,updated_by: {:?}", final_watermark.pointer, final_watermark.updated_by);
+    assert_eq!(final_watermark.pointer, "end", "watermark has not been properly updated");
 
     // Verify that all CCTX records were inserted
     let cctx_count = cross_chain_tx::Entity::find()
@@ -180,16 +195,14 @@ async fn test_status_update() {
         processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        updated_by: ActiveValue::Set("test".to_string()),
     })
     .exec(db.client().as_ref())
     .await
     .unwrap();
 
 
-    // blockscout_service_launcher::tracing::init_logs("test_status_update", &blockscout_service_launcher::tracing::TracingSettings{
-    //     enabled: true,
-    //     ..Default::default()
-    // }, &blockscout_service_launcher::tracing::JaegerSettings::default()).unwrap();
+    
 
     Mock::given(method("GET"))
         .and(path("/crosschain/cctx"))
@@ -372,28 +385,28 @@ async fn test_parse_historical_data() {
         .await
         .unwrap();
 
-    // assert_eq!(cctx_count, 100);
+    assert_eq!(cctx_count, 100);
 
-    // let first_page_cctx = cross_chain_tx::Entity::find()
-    //     .filter(
-    //         cross_chain_tx::Column::Index
-    //             .eq("0x003d98f1eaa33775e97aef378d6d0dea466187239e90b3ecb0f0fca96f8facbf"),
-    //     )
-    //     .one(db.client().as_ref())
-    //     .await
-    //     .unwrap();
+    let first_page_cctx = cross_chain_tx::Entity::find()
+        .filter(
+            cross_chain_tx::Column::Index
+                .eq("0x003d98f1eaa33775e97aef378d6d0dea466187239e90b3ecb0f0fca96f8facbf"),
+        )
+        .one(db.client().as_ref())
+        .await
+        .unwrap();
 
-    // assert!(first_page_cctx.is_some());
+    assert!(first_page_cctx.is_some());
 
-    // let second_page_cctx = cross_chain_tx::Entity::find()
-    //     .filter(
-    //         cross_chain_tx::Column::Index
-    //             .eq("0x003d98f1eaa33775e97aef378d6d0dea466187239e90b3ecb0f0fca96f8facbf"),
-    //     )
-    //     .one(db.client().as_ref())
-    //     .await
-    //     .unwrap();
-    // assert!(second_page_cctx.is_some());
+    let second_page_cctx = cross_chain_tx::Entity::find()
+        .filter(
+            cross_chain_tx::Column::Index
+                .eq("0x003d98f1eaa33775e97aef378d6d0dea466187239e90b3ecb0f0fca96f8facbf"),
+        )
+        .one(db.client().as_ref())
+        .await
+        .unwrap();
+    assert!(second_page_cctx.is_some());
 }
 
 #[tokio::test]
@@ -408,6 +421,7 @@ async fn test_lock_watermark() {
         processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        updated_by: ActiveValue::Set("test".to_string()),
     })
     .exec(db.client().as_ref())
     .await
@@ -419,11 +433,11 @@ async fn test_lock_watermark() {
         .await
         .unwrap();
     database
-        .lock_watermark(watermark.clone().unwrap())
+        .lock_watermark(watermark.clone().unwrap(),Uuid::new_v4())
         .await
         .unwrap();
     database
-        .unlock_watermark(watermark.clone().unwrap())
+        .unlock_watermark(watermark.clone().unwrap(),Uuid::new_v4())
         .await
         .unwrap();
 
@@ -657,8 +671,8 @@ async fn test_get_cctx_info() {
 }
 
 #[tokio::test]
-async fn test_gap_fill() {
-    let db = crate::helpers::init_db("test", "indexer_gap_fill").await;
+async fn test_level_data_gap() {
+    let db = crate::helpers::init_db("test", "indexer_level_data_gap").await;
 
     //simulate some sync progress
     // let last_update_timestamp= chrono::DateTime::<Utc>::from_timestamp(1750344684 as i64, 0).unwrap();
@@ -684,6 +698,7 @@ async fn test_gap_fill() {
         processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
         created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        updated_by: ActiveValue::Set("test".to_string()),
     })
     .exec(db.client().as_ref())
     .await

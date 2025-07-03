@@ -74,6 +74,11 @@ impl MigrationTrait for Migration {
                             .default(Expr::current_timestamp())
                             .not_null(),
                     )
+                    .col(
+                        ColumnDef::new(Watermark::UpdatedBy)
+                            .string()
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -527,6 +532,7 @@ enum Watermark {
     ProcessingStatus,
     CreatedAt,
     UpdatedAt,
+    UpdatedBy,
 }
 /// Learn more at https://docs.rs/sea-query#iden
 #[derive(Iden)]

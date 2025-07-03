@@ -20,6 +20,14 @@ pub struct InboundHashToCctxResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct CctxShort {
+    pub id: i32,
+    pub index: String,
+    pub root_id: Option<i32>,
+    pub depth: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CrossChainTx {
     pub creator: String,
     pub index: String,
