@@ -60,6 +60,14 @@ async fn test_historical_sync_updates_pointer() {
         .mount(&mock_server)
         .await;
 
+     Mock::given(method("GET"))
+        .and(path_regex(r"/inboundHashToCctxData/\d+"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(
+            {"CrossChainTxs": []}
+        )))
+        .mount(&mock_server)
+        .await;
+
     // Create client pointing to mock server
     let client = Client::new(RpcSettings {
         url: mock_server.uri().to_string(),
@@ -277,7 +285,6 @@ async fn test_status_update() {
     assert_eq!(cctx.unwrap().status, OutboundMined);
 }
 
-use blockscout_service_launcher::tracing::init_logs;
 #[tokio::test]
 async fn test_parse_historical_data() {
     let db = crate::helpers::init_db("test", "indexer_parse_historical_data").await;
@@ -303,6 +310,14 @@ async fn test_parse_historical_data() {
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::from_str::<serde_json::Value>(&mock_response).unwrap()),
         )
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path_regex(r"/inboundHashToCctxData/\d+"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(
+            {"CrossChainTxs": []}
+        )))
         .mount(&mock_server)
         .await;
 
@@ -562,7 +577,6 @@ async fn test_get_cctx_info() {
         |mut x| {
             x.indexer.concurrency = 1;
             x.indexer.polling_interval = 1000;
-            // x.tracing.enabled = false;
             x
         },
         db.client(),

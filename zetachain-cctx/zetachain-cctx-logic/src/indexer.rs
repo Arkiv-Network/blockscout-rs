@@ -16,7 +16,7 @@ use sea_orm::ColumnTrait;
 use crate::{client::Client, settings::IndexerSettings};
 use futures::StreamExt;
 use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter};
-use tracing::{instrument, Instrument};
+use tracing::instrument;
 
 use futures::stream::{select_with_strategy, PollNext};
 
@@ -66,7 +66,7 @@ async fn level_data_gap(
         return Ok(());
     }
     let next_key = pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
-    database.level_data_gap(job_id, cctxs, &next_key, watermark, batch_size).await?;    
+    database.level_data_gap(job_id, cctxs, &next_key, watermark).await?;    
     Ok(())
 }
 
@@ -171,7 +171,7 @@ impl Indexer {
                 realtime_fetch(job_id, database.clone(), &client, batch_size)
                 .await
                 .unwrap();
-                tokio::time::sleep(Duration::from_millis(polling_interval*20)).await;
+                tokio::time::sleep(Duration::from_millis(polling_interval)).await;
             }
         })
     }
@@ -203,15 +203,17 @@ impl Indexer {
         let status_update_batch_size = self.settings.status_update_batch_size;
         let status_update_stream = Box::pin(async_stream::stream! {
             loop {
-                let job_id = Uuid::new_v4();
-                match self.database.query_cctxs_for_status_update(status_update_batch_size, job_id).await {
+                let batch_id = Uuid::new_v4();
+                match self.database.query_cctxs_for_status_update(status_update_batch_size, batch_id).await {
                     std::result::Result::Ok(cctxs) => {
                         for cctx in cctxs {
+                            let job_id = Uuid::new_v4();
+                            tracing::debug!("job_id: {} cctx_index: {}", job_id, cctx.index);
                             yield IndexerJob::StatusUpdate(cctx, job_id);
                         }
                     }
                     Err(e) => {
-                        tracing::error!(error = %e, job_id = %job_id, "Failed to query cctxs for status update");
+                        tracing::error!(error = %e, batch_id = %batch_id, "Failed to query cctxs for status update");
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;

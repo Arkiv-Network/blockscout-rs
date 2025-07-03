@@ -282,16 +282,13 @@ impl ZetachainCctxDatabase {
     }
 
 
-    #[instrument(,level="info",skip(self,watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
+    #[instrument(,level="info",skip_all, fields(job_id = %job_id, watermark = %watermark.pointer))]
 pub async fn level_data_gap(
     self: &ZetachainCctxDatabase,
     job_id: Uuid,
-    
     cctxs: Vec<CrossChainTx>,
     next_key: &str,
     watermark: watermark::Model,
-    batch_size: u32,
-    
 ) -> anyhow::Result<()> {
     
     let earliest_fetched = cctxs.last().unwrap();
@@ -435,10 +432,9 @@ pub async fn import_cctxs(
                     ))),
                     last_update_timestamp: ActiveValue::Set(
                         chrono::DateTime::from_timestamp(
-                            cctx.cctx_status.last_update_timestamp.parse::<i64>().unwrap(),
+                            cctx.cctx_status.last_update_timestamp.parse::<i64>().unwrap_or(0),
                             0,
-                        )
-                        .unwrap()
+                        ).ok_or(anyhow::anyhow!("Invalid timestamp"))?
                         .naive_utc(),
                     ),
                     is_abort_refunded: ActiveValue::Set(cctx.cctx_status.is_abort_refunded),
@@ -623,11 +619,11 @@ pub async fn import_cctxs(
         .await?;
         Ok(())
     }
-    #[instrument(,level="debug",skip(self), fields(job_id = %job_id))]
+    #[instrument(,level="debug",skip(self), fields(batch_id = %batch_id))]
     pub async fn query_cctxs_for_status_update(
         &self,
         batch_size: u32,
-        job_id: Uuid,
+        batch_id: Uuid,
     ) -> anyhow::Result<Vec<CctxShort>> {
         let statement = format!(
             r#"
@@ -637,7 +633,7 @@ pub async fn import_cctxs(
             JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
             WHERE (cs.status IN ('PendingInbound', 'PendingOutbound', 'PendingRevert') OR cctx.tree_query_flag = false)
             AND cctx.processing_status = 'unlocked'::processing_status
-            ORDER BY cctx.last_status_update_timestamp ASC
+            ORDER BY cctx.last_status_update_timestamp DESC
             LIMIT {batch_size}
             FOR UPDATE SKIP LOCKED
         )
@@ -738,7 +734,13 @@ pub async fn import_cctxs(
                     status: ActiveValue::Set(CctxStatusStatus::try_from(fetched_cctx.cctx_status.status.clone())
                         .map_err(|e| anyhow::anyhow!(e))?
                     ),
-                    last_update_timestamp: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+                    last_update_timestamp: ActiveValue::Set(
+                        chrono::DateTime::from_timestamp(
+                            fetched_cctx.cctx_status.last_update_timestamp.parse::<i64>().unwrap_or(0),
+                            0,
+                        ).ok_or(anyhow::anyhow!("Invalid timestamp"))?
+                        .naive_utc(),
+                    ),
                     ..Default::default()
                 })
                 .filter(cctx_status::Column::Id.eq(cctx_status_row.id))
@@ -817,10 +819,9 @@ pub async fn import_cctxs(
             last_update_timestamp: ActiveValue::Set(
                 // parse NaiveDateTime from epoch seconds
                 chrono::DateTime::from_timestamp(
-                    tx.cctx_status.last_update_timestamp.parse::<i64>().unwrap(),
+                    tx.cctx_status.last_update_timestamp.parse::<i64>().unwrap_or(0),
                     0,
-                )
-                .unwrap()
+                ).ok_or(anyhow::anyhow!("Invalid timestamp"))?
                 .naive_utc(),
             ),
             is_abort_refunded: ActiveValue::Set(tx.cctx_status.is_abort_refunded),
