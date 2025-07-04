@@ -10,6 +10,8 @@ pub struct IndexerSettings {
    pub historical_batch_size: u32,
    pub status_update_batch_size: u32,
    pub realtime_fetch_batch_size: u32,
+   pub retry_threshold: u32,
+   pub failed_cctxs_polling_interval: u64,
 }
 
 
@@ -28,6 +30,8 @@ impl Default for IndexerSettings {
             historical_batch_size: 100,
             status_update_batch_size: 10,
             realtime_fetch_batch_size: 10,
+            retry_threshold: 10,
+            failed_cctxs_polling_interval: 1_000_000,
         }
     }
 }

@@ -88,7 +88,7 @@ impl Client {
         Ok(body.cross_chain_tx)
     }
 
-    #[instrument(level="debug",skip_all)]
+    #[instrument(level="info",skip_all,fields(pagination_key = ?pagination_key, unordered = unordered, batch_size = batch_size))]
     pub async fn list_cctxs(
         &self,
         pagination_key: Option<&str>,

@@ -338,7 +338,7 @@ async fn test_status_update_links_related() {
         .await;
     
 
-    let related_cctx_index = "0xf7b98c51a222d1499001eaa98004d7ee6ebebbdc46597d2d03197e8b0e7e16b2";
+    let child_depth_1_index = "0xf7b98c51a222d1499001eaa98004d7ee6ebebbdc46597d2d03197e8b0e7e16b2";
 
 
     //Make the mock return a single child of depth 1
@@ -349,12 +349,185 @@ async fn test_status_update_links_related() {
         ))
         .mount(&mock_server)
         .await;
-    //Make the mock return no children of depth 2
+    let insert_statement = format!(
+        r#"
+    INSERT INTO cross_chain_tx (id, creator, index, zeta_fees, processing_status, relayed_message, last_status_update_timestamp, protocol_contract_version) 
+    VALUES (4, 'zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm', '0xdeadbeef', '0', 'unlocked'::processing_status, '', '2025-01-19 12:31:24', 'V2');
+    INSERT INTO cctx_status (id, cross_chain_tx_id, status, status_message, error_message, last_update_timestamp, is_abort_refunded, created_timestamp, error_message_revert, error_message_abort) 
+    VALUES (4, 4, 'OutboundMined', '', '', '{}', false, 1750344684, '', '');
+    INSERT INTO inbound_params (id, cross_chain_tx_id, sender, sender_chain_id, tx_origin, coin_type, asset, amount, observed_hash, observed_external_height, ballot_index, finalized_zeta_height, tx_finalization_status, is_cross_chain_call, status, confirmation_mode) 
+    VALUES (4, 4, 'tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67', '18333', 'tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67', 'Gas', '', '8504', 'ed64294c274f4c8204f9c8e8495495b839c59d3944bfcf51ec8ad6d3d5721e38', '257082', '0xdeadbeef', '10966764', 'Executed', false, 'SUCCESS', 'SAFE');
+    INSERT INTO outbound_params (id, cross_chain_tx_id, receiver, receiver_chain_id, coin_type, amount, tss_nonce, gas_limit, gas_price, gas_priority_fee, hash, ballot_index, observed_external_height, gas_used, effective_gas_price, effective_gas_limit, tss_pubkey, tx_finalization_status, call_options_gas_limit, call_options_is_arbitrary_call, confirmation_mode) 
+    VALUES (4, 4, '0x33c2f2B93798629f1311cA9ade3D4BF732011718', '7001', 'Gas', '0', '0', '0', '', '', '0xcd6c1391ca9950bb527b36b21ac75bccd29e7a2adf105662cb5eadd4bda5b4d5', '', '10966764', '0', '0', '0', 'zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p', 'Executed', '0', false, 'SAFE');
+    INSERT INTO revert_options (id, cross_chain_tx_id, revert_address, call_on_revert, abort_address, revert_message, revert_gas_limit) 
+    VALUES (4, 4, '', false, '', NULL, '0');
+    "#,
+        chrono::Utc::now().naive_utc().to_string()
+    );
+
     Mock::given(method("GET"))
-        .and(path(format!("crosschain/inboundHashToCctxData/{}", related_cctx_index).as_str()))
+    .and(path("/crosschain/inboundHashToCctxData/0xdeadbeef"))
+    .respond_with(ResponseTemplate::new(200).set_body_json(
+        serde_json::json!({
+            "CrossChainTxs": []
+        })
+    ))
+    .mount(&mock_server)
+    .await;
+    db.client()
+        .execute_unprepared(&insert_statement)
+        .await
+        .unwrap();
+
+    //Make the mock return a single child of depth 2
+    let child_depth_2_index = "0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31";
+    Mock::given(method("GET"))
+        .and(path(format!("crosschain/inboundHashToCctxData/{}", child_depth_1_index).as_str()))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             serde_json::json!({
-                "CrossChainTxs": []
+                "CrossChainTxs": [
+                    {
+                        "creator": "zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm",
+                        "index": "0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31",
+                        "zeta_fees": "0",
+                        "relayed_message": "",
+                        "cctx_status": {
+                            "status": "OUTBOUND_MINED",
+                            "status_message": "",
+                            "error_message": "",
+                            "lastUpdate_timestamp": "1750344684",
+                            "is_abort_refunded": false,
+                            "created_timestamp": "1750344684",
+                            "error_message_revert": "",
+                            "error_message_abort": ""
+                        },
+                        "inbound_params": {
+                            "sender": "tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67",
+                            "sender_chain_id": "18333",
+                            "tx_origin": "tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67",
+                            "coin_type": "GAS",
+                            "asset": "",
+                            "amount": "8504",
+                            "observed_hash": "ed64294c274f4c8204f9c8e8495495b839c59d3944bfcf51ec8ad6d3d5721e38",
+                            "observed_external_height": "257082",
+                            "ballot_index": "0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31",
+                            "finalized_zeta_height": "10966764",
+                            "tx_finalization_status": "EXECUTED",
+                            "is_cross_chain_call": false,
+                            "status": "SUCCESS",
+                            "confirmation_mode": "SAFE"
+                        },
+                        "outbound_params": [
+                            {
+                                "receiver": "0x33c2f2B93798629f1311cA9ade3D4BF732011718",
+                                "receiver_chain_id": "7001",
+                                "coin_type": "GAS",
+                                "amount": "0",
+                                "tss_nonce": "0",
+                                "gas_limit": "0",
+                                "gas_price": "",
+                                "gas_priority_fee": "",
+                                "hash": "0xcd6c1391ca9950bb527b36b21ac75bccd29e7a2adf105662cb5eadd4bda5b4d5",
+                                "ballot_index": "",
+                                "observed_external_height": "10966764",
+                                "gas_used": "0",
+                                "effective_gas_price": "0",
+                                "effective_gas_limit": "0",
+                                "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
+                                "tx_finalization_status": "EXECUTED",
+                                "call_options": {
+                                    "gas_limit": "0",
+                                    "is_arbitrary_call": false
+                                },
+                                "confirmation_mode": "SAFE"
+                            }
+                        ],
+                        "protocol_contract_version": "V2",
+                        "revert_options": {
+                            "revert_address": "",
+                            "call_on_revert": false,
+                            "abort_address": "",
+                            "revert_message": "",
+                            "revert_gas_limit": "0"
+                        }
+                    }
+                ]
+            })
+        ))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path(format!("crosschain/inboundHashToCctxData/{}", child_depth_2_index).as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({
+                "CrossChainTxs": [
+                    {
+                        "creator": "zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm",
+                        "index": "0xdeadbeef",
+                        "zeta_fees": "0",
+                        "relayed_message": "",
+                        "cctx_status": {
+                            "status": "OUTBOUND_MINED",
+                            "status_message": "",
+                            "error_message": "",
+                            "last_update_timestamp": "1750344684",
+                            "is_abort_refunded": false,
+                            "created_timestamp": "1750344684",
+                            "error_message_revert": "",
+                            "error_message_abort": ""
+                        },
+                        "inbound_params": {
+                            "sender": "tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67",
+                            "sender_chain_id": "18333",
+                            "tx_origin": "tb1q99jmq3q5s9hzm65vg0lyk3eqht63ssw8uyzy67",
+                            "coin_type": "GAS",
+                            "asset": "",
+                            "amount": "8504",
+                            "observed_hash": "ed64294c274f4c8204f9c8e8495495b839c59d3944bfcf51ec8ad6d3d5721e38",
+                            "observed_external_height": "257082",
+                            "ballot_index": "0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31",
+                            "finalized_zeta_height": "10966764",
+                            "tx_finalization_status": "EXECUTED",
+                            "is_cross_chain_call": false,
+                            "status": "SUCCESS",
+                            "confirmation_mode": "SAFE"
+                        },
+                        "outbound_params": [
+                            {
+                                "receiver": "0x33c2f2B93798629f1311cA9ade3D4BF732011718",
+                                "receiver_chain_id": "7001",
+                                "coin_type": "GAS",
+                                "amount": "0",
+                                "tss_nonce": "0",
+                                "gas_limit": "0",
+                                "gas_price": "",
+                                "gas_priority_fee": "",
+                                "hash": "0xcd6c1391ca9950bb527b36b21ac75bccd29e7a2adf105662cb5eadd4bda5b4d5",
+                                "ballot_index": "",
+                                "observed_external_height": "10966764",
+                                "gas_used": "0",
+                                "effective_gas_price": "0",
+                                "effective_gas_limit": "0",
+                                "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
+                                "tx_finalization_status": "EXECUTED",
+                                "call_options": {
+                                    "gas_limit": "0",
+                                    "is_arbitrary_call": false
+                                },
+                                "confirmation_mode": "SAFE"
+                            }
+                        ],
+                        "protocol_contract_version": "V2",
+                        "revert_options": {
+                            "revert_address": "",
+                            "call_on_revert": false,
+                            "abort_address": "",
+                            "revert_message": "",
+                            "revert_gas_limit": "0"
+                        }
+                    }
+                ]
             })
         ))
         .mount(&mock_server)
@@ -395,32 +568,60 @@ async fn test_status_update_links_related() {
         let _ = indexer.run().await;
     });
 
-    tokio::time::sleep(Duration::from_millis(3000)).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
     indexer_handle.abort();
 
-    let cctx = cross_chain_tx::Entity::find()
+    let root = cross_chain_tx::Entity::find()
         .filter(cross_chain_tx::Column::Index.eq(pending_tx_index))
         .one(db.client().as_ref())
         .await
         .unwrap();
 
-    assert!(cctx.is_some());
-    let cctx = cctx.unwrap();
-    assert_eq!(cctx.depth, 0);
+    //root must be synced at this point by historical sync
+    assert!(root.is_some());
+    let root = root.unwrap();
+    assert_eq!(root.depth, 0);
 
 
-    let related_cctx = cross_chain_tx::Entity::find()
-        .filter(cross_chain_tx::Column::Index.eq(related_cctx_index))
+    //child_depth_1 must be synced at this point by status update
+    let child_depth_1 = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq(child_depth_1_index))
         .one(db.client().as_ref())
         .await
         .unwrap();
 
-    assert!(related_cctx.is_some());
-    let related_cctx = related_cctx.unwrap();
-    assert_eq!(related_cctx.root_id, Some(cctx.id));
-    assert_eq!(related_cctx.parent_id, Some(cctx.id));
-    assert_eq!(related_cctx.depth, 1);
+    assert!(child_depth_1.is_some());
+    let child_depth_1 = child_depth_1.unwrap();
+    assert_eq!(child_depth_1.root_id, Some(root.id));
+    assert_eq!(child_depth_1.parent_id, Some(root.id));
+    assert_eq!(child_depth_1.depth, 1);
+
+    //child_depth_2 must be synced at this point by status update
+    let child_depth_2 = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq(child_depth_2_index))
+        .one(db.client().as_ref())
+        .await
+        .unwrap();
+
+    assert!(child_depth_2.is_some());
+    let child_depth_2 = child_depth_2.unwrap();
+    assert_eq!(child_depth_2.root_id, Some(root.id));
+    assert_eq!(child_depth_2.parent_id, Some(child_depth_1.id));
+    assert_eq!(child_depth_2.depth, 2);
+
+    let recursively_updated_child_depth_2 = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq("0xdeadbeef"))
+        .one(db.client().as_ref())
+        .await
+        .unwrap();
+
+    assert!(recursively_updated_child_depth_2.is_some());
+    let recursively_updated_child_depth_2 = recursively_updated_child_depth_2.unwrap();
+    assert_eq!(recursively_updated_child_depth_2.root_id, Some(root.id));
+    assert_eq!(recursively_updated_child_depth_2.parent_id, Some(child_depth_1.id));
+    assert_eq!(recursively_updated_child_depth_2.depth, 2);
+
 }
 
 

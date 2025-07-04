@@ -41,8 +41,8 @@ async fn refresh_cctx_status(
     client: &Client,
     cctx: &CctxShort,
 ) -> anyhow::Result<()> {
-    let fetched_cctx = client.fetch_cctx(&cctx.index).await?;
-    database.update_cctx_status(cctx.id, fetched_cctx).await.map_err(|e| anyhow::anyhow!(e))?;
+    let fetched_cctx = client.fetch_cctx(&cctx.index).await.map_err(|e| anyhow::anyhow!(e.context("Failed to fetch cctx")))?;
+    database.update_cctx_status(cctx.id, fetched_cctx).await.map_err(|e| anyhow::anyhow!(e.context("Failed to update cctx status")))?;
     Ok(())
 }
 
@@ -70,7 +70,7 @@ async fn level_data_gap(
     Ok(())
 }
 
-#[instrument(,level="debug",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
+#[instrument(,level="info",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
 async fn historical_sync(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -113,11 +113,11 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
 async fn refresh_status_and_link_related(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
-    cctx: CctxShort,
+    cctx: &CctxShort,
     job_id: Uuid,
 ) -> anyhow::Result<()> {
-    refresh_cctx_status( database.clone(), client, &cctx).await?;
-    update_cctx_relations( database.clone(), client, &cctx, job_id).await?;
+    refresh_cctx_status( database.clone(), client, &cctx).await.map_err(|e| anyhow::format_err!("Failed to refresh cctx status: {}", e))?;
+    update_cctx_relations( database.clone(), client, &cctx, job_id).await.map_err(|e| anyhow::format_err!("Failed to update cctx relations: {}", e))?;
     Ok(())
 }
 
@@ -132,10 +132,13 @@ async fn update_cctx_relations(
     // Fetch children using the inbound hash to CCTX data endpoint
     let children_response = client
         .get_inbound_hash_to_cctx_data(&cctx.index)
-        .await?;
+        .await.map_err(|e| anyhow::format_err!("Failed to fetch children: {}", e))?;
     
     tracing::info!("children_response: {:?}", children_response);
-    database.traverse_and_update_tree_relationships(children_response.cross_chain_txs, cctx, job_id).await?;
+    database
+    .traverse_and_update_tree_relationships(children_response.cross_chain_txs, cctx, job_id)
+    .await
+    .map_err(|e| anyhow::format_err!("Failed to traverse and update cctx tree relationships: {}", e))?;
 
     Ok(())
 }
@@ -270,15 +273,37 @@ impl Indexer {
             }
         });
 
+        let failed_cctxs_stream = Box::pin(async_stream::stream! {
+            loop {
+                let batch_id = Uuid::new_v4();
+                match self.database.query_failed_cctxs(batch_id).await {
+                    std::result::Result::Ok(cctxs) => {
+                        for cctx in cctxs {
+                            let job_id = Uuid::new_v4();
+                            yield IndexerJob::StatusUpdate(cctx, job_id);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, batch_id = %batch_id, "Failed to query failed cctxs");
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
+            }
+        });
 
-        // Priority strategy:
-        // 1. Levelling gaps in the recent data (ensuring data continuity is the highest priority)
-        // 2. Status updates and related cctxs search (medium priority) in LIFO order. 
-        // 3. Historical sync (lowest priority - can lag without affecting realtime)
+
+        //Most of the data is processed in streams, because we don't care about exact timings but rather the eventual consistency and processing order.
+        // Priority strategy in descending order:
+        // 1. Levelling gaps in the recent data (ensuring data continuity is the highest priority). Failure strategy is unclear for now, we just keep trying. Exhaustion is unlikely.
+        // 2. Status updates and related cctxs search (medium priority) in LIFO order. If cctx update fails a lot, we mark it as failed and pass it to the failed cctxs stream.
+        // 3. Historical sync. We can't skip the watermark, because it's sequential, and we can't fetch the next pointer without processing the current one, so we have to keep trying.
+        // 4. Failed cctx updates (lowest priority)
         let combined_stream =
-            select_with_strategy(status_update_stream, historical_stream, prio_left);
+            select_with_strategy(historical_stream, failed_cctxs_stream, prio_left);
+        let combined_stream =
+            select_with_strategy(status_update_stream, combined_stream, prio_left);
         let combined_stream = select_with_strategy(level_data_gap_stream, combined_stream, prio_left);
-        // Realtime data fetch must run at configured frequency, so we run it in parallel as a dedicated thread 
+        // Unlike everything else, realtime data fetch must run at configured frequency, so we run it in parallel as a dedicated thread 
         // We can't use streams because it would lead to accumulation of jobs
         let dedicated_real_time_fetcher = self.realtime_fetch_handler();
         
@@ -288,18 +313,30 @@ impl Indexer {
                 let database = self.database.clone();
                 let historical_batch_size = self.settings.historical_batch_size;
                 let level_data_gap_batch_size = self.settings.realtime_fetch_batch_size;
+                let retry_threshold = self.settings.retry_threshold;
                 tokio::spawn(async move {
                     match job {
                         IndexerJob::StatusUpdate(cctx, job_id) => {
-                            if let Err(e) =  refresh_status_and_link_related(database.clone(), &client, cctx, job_id).await {
+                            if let Err(e) =  refresh_status_and_link_related(database.clone(), &client, &cctx, job_id).await {
                                 tracing::error!(error = %e, job_id = %job_id, "Failed to refresh status and link related cctx");
+                                if cctx.retries_number == retry_threshold as i32 {
+                                    database
+                                    .mark_cctx_as_failed(&cctx)
+                                    .await
+                                    .unwrap();
+                                }
+                                database
+                                .unlock_cctx(cctx.id)
+                                .await
+                                .unwrap();
                             }
                             
                         }
                         IndexerJob::LevelDataGap(watermark, job_id) => {
                            
                            if let Err(e) = level_data_gap(job_id, database.clone(), &client, watermark.clone(), level_data_gap_batch_size).await {
-                            tracing::error!(error = %e, job_id = %job_id, "Failed to perform gap fill");
+                            tracing::error!(error = %e, job_id = %job_id, "Failed to level data gap");
+                            database.unlock_watermark(watermark,job_id).await.unwrap();
                            }
                            
                         }

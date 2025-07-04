@@ -69,6 +69,21 @@ impl ZetachainCctxDatabase {
         cctx_status.ok_or(anyhow::anyhow!("cctx {} has no status", cctx_id))
     }
 
+    #[instrument(level = "debug", skip_all)]
+    pub async fn mark_cctx_as_failed(&self, cctx: &CctxShort) -> anyhow::Result<()> {
+        
+        CrossChainTxEntity::Entity::update(CrossChainTxEntity::ActiveModel {
+            id: ActiveValue::Set(cctx.id),
+            processing_status: ActiveValue::Set(ProcessingStatus::Failed),
+            retries_number: ActiveValue::Set(cctx.retries_number),
+            ..Default::default()
+        })
+            .filter(CrossChainTxEntity::Column::Id.eq(cctx.id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
     pub async fn get_cctx_ids_by_index(
         &self,
         cctxs: Vec<models::CrossChainTx>,
@@ -448,7 +463,7 @@ impl ZetachainCctxDatabase {
             .instrument(tracing::debug_span!("inserting cctxs", job_id = %job_id))
             .await?;
 
-        tracing::debug!("inserted cctxs: {:?}", inserted_cctxs.len());
+        tracing::info!("inserted cctxs: {:?}", inserted_cctxs.len());
         // Create a map from index to id for quick lookup
         let index_to_id: std::collections::HashMap<String, i32> = inserted_cctxs
             .into_iter()
@@ -676,29 +691,25 @@ impl ZetachainCctxDatabase {
         .await?;
         Ok(())
     }
-    #[instrument(,level="debug",skip(self), fields(batch_id = %batch_id))]
-    pub async fn query_cctxs_for_status_update(
-        &self,
-        batch_size: u32,
-        batch_id: Uuid,
-    ) -> anyhow::Result<Vec<CctxShort>> {
+
+    #[instrument(,level="debug",skip(self),fields(batch_id = %batch_id))]
+    pub async fn query_failed_cctxs(&self, batch_id: Uuid) -> anyhow::Result<Vec<CctxShort>> {
+
         let statement = format!(
             r#"
         WITH cctxs AS (
             SELECT cctx.id
             FROM cross_chain_tx cctx
             JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
-            WHERE (cs.status IN ('PendingInbound', 'PendingOutbound', 'PendingRevert') OR cctx.tree_query_flag = false)
-            AND cctx.processing_status = 'unlocked'::processing_status
-            AND cctx.last_status_update_timestamp > NOW() - INTERVAL '1 minute' * POWER(2, cctx.retries_number)
+            WHERE cctx.processing_status = 'failed'::processing_status
+            AND cctx.last_status_update_timestamp + INTERVAL '1 hour' * POWER(2, cctx.retries_number) < NOW() 
             ORDER BY cctx.last_status_update_timestamp ASC,cs.created_timestamp DESC
-            LIMIT {batch_size}
-            FOR UPDATE SKIP LOCKED
+            LIMIT 100
         )
         UPDATE cross_chain_tx cctx
         SET processing_status = 'locked'::processing_status, last_status_update_timestamp = NOW(), retries_number = retries_number + 1
         WHERE id IN (SELECT id FROM cctxs)
-        RETURNING id, index, root_id, depth
+        RETURNING id, index, root_id, depth, retries_number
         "#
         );
 
@@ -715,6 +726,57 @@ impl ZetachainCctxDatabase {
                     index: r.try_get_by_index(1)?,
                     root_id: r.try_get_by_index(2)?,
                     depth: r.try_get_by_index(3)?,
+                    retries_number: r.try_get_by_index(4)?,
+                })
+            })
+            .collect::<Result<Vec<CctxShort>, sea_orm::DbErr>>();
+
+        cctxs.map_err(|e| anyhow::anyhow!(e))
+
+    }
+
+
+
+    #[instrument(,level="debug",skip(self), fields(batch_id = %batch_id))]
+    pub async fn query_cctxs_for_status_update(
+        &self,
+        batch_size: u32,
+        batch_id: Uuid,
+    ) -> anyhow::Result<Vec<CctxShort>> {
+        let statement = format!(
+            r#"
+        WITH cctxs AS (
+            SELECT cctx.id
+            FROM cross_chain_tx cctx
+            JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
+            WHERE (cs.status IN ('PendingInbound', 'PendingOutbound', 'PendingRevert') OR cctx.tree_query_flag = false)
+            AND cctx.processing_status = 'unlocked'::processing_status
+            AND cctx.last_status_update_timestamp + INTERVAL '5 second' * POWER(2, cctx.retries_number) < NOW() 
+            ORDER BY cctx.last_status_update_timestamp ASC,cs.created_timestamp DESC
+            LIMIT {batch_size}
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE cross_chain_tx cctx
+        SET processing_status = 'locked'::processing_status, last_status_update_timestamp = NOW(), retries_number = retries_number + 1
+        WHERE id IN (SELECT id FROM cctxs)
+        RETURNING id, index, root_id, depth, retries_number
+        "#
+        );
+
+        let statement = Statement::from_sql_and_values(DbBackend::Postgres, statement, vec![]);
+
+        let cctxs: Result<Vec<CctxShort>, sea_orm::DbErr> = self
+            .db
+            .query_all(statement)
+            .await?
+            .iter()
+            .map(|r| {
+                std::result::Result::Ok(CctxShort {
+                    id: r.try_get_by_index(0)?,
+                    index: r.try_get_by_index(1)?,
+                    root_id: r.try_get_by_index(2)?,
+                    depth: r.try_get_by_index(3)?,
+                    retries_number: r.try_get_by_index(4)?,
                 })
             })
             .collect::<Result<Vec<CctxShort>, sea_orm::DbErr>>();

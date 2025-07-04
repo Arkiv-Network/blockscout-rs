@@ -25,6 +25,7 @@ pub struct CctxShort {
     pub index: String,
     pub root_id: Option<i32>,
     pub depth: i32,
+    pub retries_number: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
