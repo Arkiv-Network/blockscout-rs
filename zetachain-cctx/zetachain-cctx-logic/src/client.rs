@@ -44,7 +44,7 @@ pub struct Client {
 }
 
 impl Client {
-    #[instrument(level="debug",skip(self, request), fields( url = ?request.url().as_str()))]
+    #[instrument(level="debug",skip(self, request))]
     async fn make_request(&self, request: Request) -> anyhow::Result<Response> {
         for attempt in 1..=self.settings.num_of_retries {
             let permit = timeout(
@@ -88,7 +88,7 @@ impl Client {
         Ok(body.cross_chain_tx)
     }
 
-    #[instrument(level="info",skip_all,fields(pagination_key = ?pagination_key, unordered = unordered, batch_size = batch_size))]
+    #[instrument(level="debug",skip_all)]
     pub async fn list_cctxs(
         &self,
         pagination_key: Option<&str>,

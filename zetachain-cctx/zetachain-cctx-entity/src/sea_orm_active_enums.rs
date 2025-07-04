@@ -69,6 +69,8 @@ pub enum ProcessingStatus {
     Unlocked,
     #[sea_orm(string_value = "failed")]
     Failed,
+    #[sea_orm(string_value = "done")]
+    Done,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(

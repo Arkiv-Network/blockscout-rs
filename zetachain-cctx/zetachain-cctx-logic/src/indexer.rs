@@ -12,7 +12,8 @@ use zetachain_cctx_entity::sea_orm_active_enums::{Kind, ProcessingStatus};
 use zetachain_cctx_entity::watermark;
 
 use sea_orm::ColumnTrait;
-
+use std::result::Result::Ok as ResultOk;
+use std::result::Result::Err as ResultErr;
 use crate::{client::Client, settings::IndexerSettings};
 use futures::StreamExt;
 use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter};
@@ -41,8 +42,8 @@ async fn refresh_cctx_status(
     client: &Client,
     cctx: &CctxShort,
 ) -> anyhow::Result<()> {
-    let fetched_cctx = client.fetch_cctx(&cctx.index).await.map_err(|e| anyhow::anyhow!(e.context("Failed to fetch cctx")))?;
-    database.update_cctx_status(cctx.id, fetched_cctx).await.map_err(|e| anyhow::anyhow!(e.context("Failed to update cctx status")))?;
+    let fetched_cctx = client.fetch_cctx(&cctx.index).await.map_err(|e| anyhow::anyhow!(format!("Failed to fetch cctx: {}", e)))?;
+    database.update_cctx_status(cctx.id, fetched_cctx).await.map_err(|e| anyhow::anyhow!(format!("Failed to update cctx status: {}", e)))?;
     Ok(())
 }
 
@@ -53,24 +54,28 @@ async fn level_data_gap(
     client: &Client,
     watermark: watermark::Model,
     batch_size: u32,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<(ProcessingStatus,String)> {
     let PagedCCTXResponse { cross_chain_tx : cctxs, pagination } = client
     .list_cctxs(Some(&watermark.pointer), false, batch_size)
     .await?;
     
+    if cctxs.is_empty() {
+        tracing::debug!("No recent cctxs found");
+        return Ok((ProcessingStatus::Done,watermark.pointer));
+    }
     let earliest_cctx = cctxs.last().unwrap();
     let last_synced_cctx = database.query_cctx(earliest_cctx.index.clone()).await?;
 
     if last_synced_cctx.is_some() {
-        tracing::debug!("last synced cctx {} is present, skipping", earliest_cctx.index);
-        return Ok(());
+        tracing::debug!("last synced cctx {} is present", earliest_cctx.index);
+        return Ok((ProcessingStatus::Done,watermark.pointer));
     }
     let next_key = pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
-    database.level_data_gap(job_id, cctxs, &next_key, watermark).await?;    
-    Ok(())
+    let res = database.level_data_gap(job_id, cctxs, &next_key, watermark).await?;
+    Ok(res)
 }
 
-#[instrument(,level="info",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
+#[instrument(,level="debug",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
 async fn historical_sync(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -86,7 +91,7 @@ async fn historical_sync(
         return Err(anyhow::anyhow!("Node returned empty response"));
     }
     let next_key = response.pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
-    //atomically insert cctxs and update watermark
+    //atomically insert cctxs and update watermark    
     database.import_cctxs(job_id, cross_chain_txs, &next_key, watermark).await?;
     Ok(())
 }
@@ -211,7 +216,7 @@ impl Indexer {
                 let batch_id = Uuid::new_v4();
                 match self.database.query_cctxs_for_status_update(status_update_batch_size, batch_id).await {
                     std::result::Result::Ok(cctxs) => {
-                        tracing::info!("found {:?} cctxs for status update", cctxs);
+                        tracing::info!("found {:?} cctxs for status update", cctxs.iter().map(|c| c.index.clone()).collect::<Vec<String>>());
                         for cctx in cctxs {
                             let job_id = Uuid::new_v4();
                             tracing::debug!("job_id: {} cctx_index: {}", job_id, cctx.index);
@@ -320,26 +325,29 @@ impl Indexer {
                             if let Err(e) =  refresh_status_and_link_related(database.clone(), &client, &cctx, job_id).await {
                                 tracing::error!(error = %e, job_id = %job_id, "Failed to refresh status and link related cctx");
                                 if cctx.retries_number == retry_threshold as i32 {
-                                    database
-                                    .mark_cctx_as_failed(&cctx)
-                                    .await
-                                    .unwrap();
+                                    database.mark_cctx_as_failed(&cctx).await.unwrap();
+                                } else {
+                                database.unlock_cctx(cctx.id).await.unwrap();
                                 }
-                                database
-                                .unlock_cctx(cctx.id)
-                                .await
-                                .unwrap();
                             }
-                            
                         }
                         IndexerJob::LevelDataGap(watermark, job_id) => {
                            
-                           if let Err(e) = level_data_gap(job_id, database.clone(), &client, watermark.clone(), level_data_gap_batch_size).await {
-                            tracing::error!(error = %e, job_id = %job_id, "Failed to level data gap");
-                            database.unlock_watermark(watermark,job_id).await.unwrap();
-                           }
-                           
-                        }
+                            match level_data_gap(job_id, database.clone(), &client, watermark.clone(), level_data_gap_batch_size)  
+                             .await {
+                             ResultOk((ProcessingStatus::Done,_)) =>  database.mark_watermark_as_done(watermark).await.unwrap(),
+                             ResultErr(e) => {
+                                 tracing::warn!(error = %e, job_id = %job_id, "Failed to level data gap");
+                                 if watermark.retries_number < retry_threshold as i32 {
+                                    database.unlock_watermark(watermark,job_id).await.unwrap();
+                                 } else {
+                                    database.mark_watermark_as_failed(watermark).await.unwrap();
+                                 }
+                             }
+                             _ => {}
+                         }
+                        }   
+                        
                         IndexerJob::HistoricalDataFetch(watermark, job_id) => { 
                             if let Err(e) = historical_sync(database.clone(), &client, watermark.clone(), job_id, historical_batch_size).await {
                                 tracing::warn!(error = %e, job_id = %job_id, "Failed to sync historical data");

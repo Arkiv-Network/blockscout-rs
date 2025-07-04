@@ -21,7 +21,6 @@ pub struct Model {
     pub protocol_contract_version: ProtocolContractVersion,
     pub root_id: Option<i32>,
     pub parent_id: Option<i32>,
-    pub tree_query_flag: bool,
     pub depth: i32,
 }
 

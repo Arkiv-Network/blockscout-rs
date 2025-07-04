@@ -32,7 +32,7 @@ impl MigrationTrait for Migration {
                     CREATE TYPE protocol_contract_version AS ENUM ('V1', 'V2');
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'processing_status') THEN
-                    CREATE TYPE processing_status AS ENUM ('locked', 'unlocked', 'failed');
+                    CREATE TYPE processing_status AS ENUM ('locked', 'unlocked', 'failed', 'done');
                 END IF;
             END $$;"#,
         )
@@ -58,7 +58,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Watermark::Pointer).string().not_null())
                     .col(
                         ColumnDef::new(Watermark::ProcessingStatus)
-                            .enumeration("processing_status", ["locked", "unlocked", "failed"])
+                            .enumeration("processing_status", ["locked", "unlocked", "failed", "done"])
                             .not_null()
                             .default("unlocked"),
                     )
@@ -79,7 +79,13 @@ impl MigrationTrait for Migration {
                             .string()
                             .not_null(),
                     )
-                    .to_owned(),
+                    .col(
+                        ColumnDef::new(Watermark::RetriesNumber)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .to_owned(),    
             )
             .await?;
         // Create cross_chain_txs table
@@ -101,7 +107,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(CrossChainTx::RetriesNumber).integer().not_null().default(0))
                     .col(
                         ColumnDef::new(CrossChainTx::ProcessingStatus)
-                            .enumeration("processing_status", ["locked", "unlocked","failed"])
+                            .enumeration("processing_status", ["locked", "unlocked", "failed", "done"])
                             .not_null()
                             .default("unlocked"),
                     )
@@ -126,12 +132,6 @@ impl MigrationTrait for Migration {
                         ColumnDef::new(CrossChainTx::ParentId)
                             .integer()
                             .null(),
-                    )
-                    .col(
-                        ColumnDef::new(CrossChainTx::TreeQueryFlag)
-                            .boolean()
-                            .not_null()
-                            .default(false),
                     )
                     .col(
                         ColumnDef::new(CrossChainTx::Depth)
@@ -516,6 +516,9 @@ impl MigrationTrait for Migration {
                 IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tx_finalization_status') THEN
                     DROP TYPE tx_finalization_status;
                 END IF;
+                IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'processing_status') THEN
+                    DROP TYPE processing_status;
+                END IF;
             END $$;"#,
         )
         .await?;
@@ -534,6 +537,7 @@ enum Watermark {
     CreatedAt,
     UpdatedAt,
     UpdatedBy,
+    RetriesNumber,
 }
 /// Learn more at https://docs.rs/sea-query#iden
 #[derive(Iden)]
@@ -549,7 +553,6 @@ enum CrossChainTx {
     LastStatusUpdateTimestamp,
     RootId,
     ParentId,
-    TreeQueryFlag,
     Depth,
     RetriesNumber,
 }
