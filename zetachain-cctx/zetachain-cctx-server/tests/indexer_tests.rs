@@ -286,6 +286,146 @@ async fn test_status_update() {
 }
 
 #[tokio::test]
+async fn test_status_update_links_related() {
+
+    if std::env::var("TEST_TRACING").unwrap_or_default() == "true" {
+        init_tests_logs().await;
+    }
+
+    let db = crate::helpers::init_db("test", "indexer_status_update_links_related").await;
+    let mock_server = MockServer::start().await;
+    setup_status_update_mock_responses(&mock_server).await;
+
+    let empty_response = serde_json::json!({
+        "CrossChainTx": [],
+        "pagination": {
+            "next_key": "end",
+            "total": "0"
+        }
+    });
+
+    let pending_tx_index = "0xb313d88712a40bcc30b4b7c9aa6f073b9f9eb6e2ae3e4d6e704bd9c15c8a7759";
+    Mock::given(method("GET"))
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "true"))
+        .and(query_param("pagination.key", "MH=="))
+        .respond_with(ResponseTemplate::new(200)
+        .set_body_json(serde_json::from_str::<serde_json::Value>(&PENDING_TX_PAGE).unwrap()))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "true"))
+        .and(query_param("pagination.key", "end"))
+        .respond_with(ResponseTemplate::new(200)
+        .set_body_json(&empty_response))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "false"))
+        .respond_with(ResponseTemplate::new(200)
+        .set_body_json(&empty_response))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path_regex(r"/crosschain/cctx/\d+"))
+        .respond_with(ResponseTemplate::new(200)
+        .set_body_json(serde_json::from_str::<serde_json::Value>(&FINALIZED_TX_RESPONSE).unwrap()))
+        .mount(&mock_server)
+        .await;
+    
+
+    let related_cctx_index = "0xf7b98c51a222d1499001eaa98004d7ee6ebebbdc46597d2d03197e8b0e7e16b2";
+
+
+    //Make the mock return a single child of depth 1
+    Mock::given(method("GET"))
+        .and(path(format!("crosschain/inboundHashToCctxData/{}", pending_tx_index).as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::from_str::<serde_json::Value>(&RELATED_CCTX_RESPONSE).unwrap()
+        ))
+        .mount(&mock_server)
+        .await;
+    //Make the mock return no children of depth 2
+    Mock::given(method("GET"))
+        .and(path(format!("crosschain/inboundHashToCctxData/{}", related_cctx_index).as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({
+                "CrossChainTxs": []
+            })
+        ))
+        .mount(&mock_server)
+        .await;
+    
+
+    watermark::Entity::insert(watermark::ActiveModel {
+        id: ActiveValue::NotSet,
+        kind: ActiveValue::Set(Kind::Historical),
+        pointer: ActiveValue::Set("MH==".to_string()),
+        processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
+        created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        updated_by: ActiveValue::Set("test".to_string()),
+    })
+    .exec(db.client().as_ref())
+    .await
+    .unwrap();
+
+    let client = Client::new(RpcSettings {
+        url: mock_server.uri().to_string(),
+        request_per_second: 100,
+        ..Default::default()
+    });
+
+    let indexer = Indexer::new(
+        IndexerSettings {
+            polling_interval: 100, // Fast polling for tests
+            concurrency: 1,
+            ..Default::default()
+        },
+        db.client().clone(),
+        Arc::new(client),
+        Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
+    );
+
+    let indexer_handle = tokio::spawn(async move {
+        let _ = indexer.run().await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+
+    indexer_handle.abort();
+
+    let cctx = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq(pending_tx_index))
+        .one(db.client().as_ref())
+        .await
+        .unwrap();
+
+    assert!(cctx.is_some());
+    let cctx = cctx.unwrap();
+    assert_eq!(cctx.depth, 0);
+
+
+    let related_cctx = cross_chain_tx::Entity::find()
+        .filter(cross_chain_tx::Column::Index.eq(related_cctx_index))
+        .one(db.client().as_ref())
+        .await
+        .unwrap();
+
+    assert!(related_cctx.is_some());
+    let related_cctx = related_cctx.unwrap();
+    assert_eq!(related_cctx.root_id, Some(cctx.id));
+    assert_eq!(related_cctx.parent_id, Some(cctx.id));
+    assert_eq!(related_cctx.depth, 1);
+}
+
+
+
+#[tokio::test]
 async fn test_parse_historical_data() {
     let db = crate::helpers::init_db("test", "indexer_parse_historical_data").await;
     let mock_server = MockServer::start().await;
@@ -1317,6 +1457,79 @@ pub const SECOND_PAGE_RESPONSE: &str = r#"
         "next_key": "THIRD_PAGE",
         "total": "0"
     }
+}
+"#;
+
+
+pub const RELATED_CCTX_RESPONSE: &str = r#"
+{
+    "CrossChainTxs": [
+    {
+            "creator": "",
+            "index": "0xf7b98c51a222d1499001eaa98004d7ee6ebebbdc46597d2d03197e8b0e7e16b2",
+            "zeta_fees": "0",
+            "relayed_message": "",
+            "cctx_status": {
+                "status": "OutboundMined",
+                "status_message": "",
+                "error_message": "",
+                "lastUpdate_timestamp": "1750344706",
+                "isAbortRefunded": false,
+                "created_timestamp": "1750344287",
+                "error_message_revert": "",
+                "error_message_abort": ""
+            },
+            "inbound_params": {
+                "sender": "0x58A8Ba18c585C411B95Ba1e78962a2A3E1c6f52a",
+                "sender_chain_id": "7001",
+                "tx_origin": "0x58A8Ba18c585C411B95Ba1e78962a2A3E1c6f52a",
+                "coin_type": "Gas",
+                "asset": "",
+                "amount": "900000",
+                "observed_hash": "0xa6e706fb088fb81598697da4eb0efccb8a6e4714afca6e8237bacee543b2bf4a",
+                "observed_external_height": "10966670",
+                "ballot_index": "0xf7b98c51a222d1499001eaa98004d7ee6ebebbdc46597d2d03197e8b0e7e16b2",
+                "finalized_zeta_height": "0",
+                "tx_finalization_status": "NotFinalized",
+                "is_cross_chain_call": false,
+                "status": "SUCCESS",
+                "confirmation_mode": "SAFE"
+            },
+            "outbound_params": [
+                {
+                    "receiver": "tb1qhamwhl4w4sdv4j6g5vsfntna2a80kvkunllytl",
+                    "receiver_chainId": "18333",
+                    "coin_type": "Gas",
+                    "amount": "900000",
+                    "tss_nonce": "130",
+                    "gas_limit": "0",
+                    "gas_price": "36",
+                    "gas_priority_fee": "0",
+                    "hash": "ee9f4697a40dc84de2b3410887358e830e66fbd12e44b4a75b2364ae6b1a2ee5",
+                    "ballot_index": "0x7d03a4fca71bee0dcd0d2bbce2add42d9921cb3ace4ee7de7e2b18beb528cc28",
+                    "observed_external_height": "257083",
+                    "gas_used": "0",
+                    "effective_gas_price": "0",
+                    "effective_gas_limit": "0",
+                    "tss_pubkey": "zetapub1addwnpepq28c57cvcs0a2htsem5zxr6qnlvq9mzhmm76z3jncsnzz32rclangr2g35p",
+                    "tx_finalization_status": "Executed",
+                    "call_options": {
+                        "gas_limit": "100",
+                        "is_arbitrary_call": true
+                    },
+                    "confirmation_mode": "SAFE"
+                }
+            ],
+            "protocol_contract_version": "V2",
+            "revert_options": {
+                "revert_address": "0x0000000000000000000000000000000000000000",
+                "call_on_revert": false,
+                "abort_address": "0x0000000000000000000000000000000000000000",
+                "revert_message": null,
+                "revert_gas_limit": "0"
+            }
+        }
+    ]
 }
 "#;
 

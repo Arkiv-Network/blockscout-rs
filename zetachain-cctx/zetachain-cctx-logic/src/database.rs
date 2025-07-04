@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::models::{self, CctxShort, CrossChainTx};
 use anyhow::Ok;
 use chrono::Utc;
+use sea_orm::ConnectionTrait;
 use sea_orm::{
     ActiveValue, DatabaseConnection, DatabaseTransaction, DbBackend, Statement, TransactionTrait,
 };
@@ -19,7 +20,6 @@ use zetachain_cctx_entity::{
     },
     watermark,
 };
-use sea_orm::ConnectionTrait;
 
 pub struct ZetachainCctxDatabase {
     db: Arc<DatabaseConnection>,
@@ -114,8 +114,8 @@ impl ZetachainCctxDatabase {
         Ok(cctx.iter().map(|cctx| cctx.id).collect())
     }
 
-    #[instrument(level="debug",skip_all)]
-    pub async fn update_cctx_tree_relationships(
+    #[instrument(level = "debug", skip_all)]
+    pub async fn update_multiple_related_cctxs(
         &self,
         cctx_ids: Vec<i32>,
         root_id: i32,
@@ -134,37 +134,71 @@ impl ZetachainCctxDatabase {
             .await?;
         Ok(())
     }
+    #[instrument(level = "debug", skip_all)]
+    pub async fn update_single_related_cctx(
+        &self,
+        child_id: i32,
+        root_id: i32,
+        depth: i32,
+        tx: &DatabaseTransaction,
+    ) -> anyhow::Result<()> {
+        CrossChainTxEntity::Entity::update_many()
+            .filter(CrossChainTxEntity::Column::Id.eq(child_id))
+            .set(CrossChainTxEntity::ActiveModel {
+                root_id: ActiveValue::Set(Some(root_id)),
+                depth: ActiveValue::Set(depth),
+                last_status_update_timestamp: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+                ..Default::default()
+            })
+            .exec(tx)
+            .await?;
+        Ok(())
+    }
 
-    #[instrument(level="debug",skip_all)]
+    #[instrument(level = "info", skip_all)]
     pub async fn traverse_and_update_tree_relationships(
         &self,
         children_cctxs: Vec<CrossChainTx>,
         cctx: &CctxShort,
+        job_id: Uuid,
     ) -> anyhow::Result<()> {
         let cctx_status = self.get_cctx_status(cctx.id).await?;
         let children_results = self.get_cctx_ids_by_index(children_cctxs).await?;
-        let children_ids: Vec<i32> = children_results
-            .into_iter()
-            .filter_map(|(_, id)| id)
-            .collect();
+        tracing::info!("children_results: {:?}", children_results);
+
         let tx = self.db.begin().await?;
 
         let new_root_id = cctx.root_id.unwrap_or(cctx.id);
-        if !children_ids.is_empty() {
-            let mut frontier = children_ids;
-            let mut current_depth = cctx.depth + 1;
 
-            loop {
-                let new_frontier = self.get_cctx_ids_by_parent_id(frontier.clone()).await?;
-                if new_frontier.is_empty() {
-                    break;
-                }
-                self.update_cctx_tree_relationships(frontier, new_root_id, current_depth, &tx)
+        for (child, child_id) in children_results {
+            if child_id.is_some() {
+                self.update_single_related_cctx(child_id.unwrap(), new_root_id, cctx.depth + 1, &tx)
                     .await?;
-                frontier = new_frontier;
-                current_depth += 1;
+                let mut frontier = vec![child_id.unwrap()];
+                let mut current_depth = cctx.depth + 1;
+
+                loop {
+                    let new_frontier = self.get_cctx_ids_by_parent_id(frontier.clone()).await?;
+                    if new_frontier.is_empty() {
+                        break;
+                    }
+                    self.update_multiple_related_cctxs(frontier, new_root_id, current_depth, &tx)
+                        .await?;
+                    frontier = new_frontier;
+                    current_depth += 1;
+                }
+            } else {
+                self.insert_transaction_with_tree_relationships(
+                    child,
+                    job_id,
+                    new_root_id,
+                    cctx.id,
+                    cctx.depth + 1,
+                )
+                .await?;
             }
         }
+
         // If the cctx is mined, there is no need to do any additional requests
         if cctx_status.status == CctxStatusStatus::OutboundMined {
             self.mark_cctx_tree_processed(cctx.id, &tx).await?;
@@ -262,8 +296,12 @@ impl ZetachainCctxDatabase {
         Ok(cctx)
     }
 
-    #[instrument(level="debug",skip_all)]
-    pub async fn create_realtime_watermark(&self, pointer: String,job_id: Uuid) -> anyhow::Result<()> {
+    #[instrument(level = "debug", skip_all)]
+    pub async fn create_realtime_watermark(
+        &self,
+        pointer: String,
+        job_id: Uuid,
+    ) -> anyhow::Result<()> {
         watermark::Entity::insert(watermark::ActiveModel {
             id: ActiveValue::NotSet,
             kind: ActiveValue::Set(Kind::Realtime),
@@ -281,81 +319,84 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-
     #[instrument(,level="info",skip_all, fields(job_id = %job_id, watermark = %watermark.pointer))]
-pub async fn level_data_gap(
-    self: &ZetachainCctxDatabase,
-    job_id: Uuid,
-    cctxs: Vec<CrossChainTx>,
-    next_key: &str,
-    watermark: watermark::Model,
-) -> anyhow::Result<()> {
-    
-    let earliest_fetched = cctxs.last().unwrap();
-    let latest_synced = self.query_cctx(earliest_fetched.index.clone()).await?;
-    if latest_synced.is_some() {
-        tracing::debug!("last synced cctx {} is present, skipping", earliest_fetched.index);
-    }  else {
+    pub async fn level_data_gap(
+        self: &ZetachainCctxDatabase,
+        job_id: Uuid,
+        cctxs: Vec<CrossChainTx>,
+        next_key: &str,
+        watermark: watermark::Model,
+    ) -> anyhow::Result<()> {
+        let earliest_fetched = cctxs.last().unwrap();
+        let latest_synced = self.query_cctx(earliest_fetched.index.clone()).await?;
+        if latest_synced.is_some() {
+            tracing::debug!(
+                "last synced cctx {} is present, skipping",
+                earliest_fetched.index
+            );
+        } else {
+            let tx = self.db.begin().await?;
+            self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
+            self.move_watermark(watermark, next_key, &tx).await?;
+            tx.commit().await?;
+        }
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    pub async fn process_realtime_cctxs(
+        &self,
+        job_id: Uuid,
+        cctxs: Vec<CrossChainTx>,
+        next_key: &str,
+    ) -> anyhow::Result<()> {
+        let tx = self.db.begin().await?;
+        //check whether the latest fetched cctx is present in the database
+        //we fetch transaction in LIFO order
+        let latest_fetched = cctxs.first().unwrap();
+        let latest_loaded = self.query_cctx(latest_fetched.index.clone()).await?;
+
+        //if latest fetched cctx is in the db that means that the upper boundary is already covered and there is no new cctxs to save
+        if latest_loaded.is_some() {
+            tracing::debug!("latest cctx already exists, skipping");
+            return Ok(());
+        }
+        //now we need to check the lower boudary ( the earliest of the fetched cctxs)
+        let earliest_fetched = cctxs.last().unwrap();
+        let earliest_loaded = self.query_cctx(earliest_fetched.index.clone()).await?;
+
+        if earliest_loaded.is_none() {
+            // the lower boundary is not covered, so there could be more transaction that happened earlier, that we haven't observed
+            //we have to save current pointer to continue fetching until we hit a known transaction
+            tracing::debug!(
+                "earliest cctx not found, creating new realtime watermark {}",
+                next_key
+            );
+            self.create_realtime_watermark(next_key.to_owned(), job_id)
+                .await?;
+        }
+
+        self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+    #[instrument(level = "info", skip_all)]
+    pub async fn import_cctxs(
+        &self,
+        job_id: Uuid,
+        cctxs: Vec<CrossChainTx>,
+        next_key: &str,
+        watermark: watermark::Model,
+    ) -> anyhow::Result<()> {
         let tx = self.db.begin().await?;
         self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
         self.move_watermark(watermark, next_key, &tx).await?;
         tx.commit().await?;
+        Ok(())
     }
-    Ok(())
-}
-
-
-#[instrument(level="debug",skip_all)]
-pub async fn process_realtime_cctxs(
-    &self,
-    job_id: Uuid,
-    cctxs: Vec<CrossChainTx>,
-    next_key: &str,
-) -> anyhow::Result<()> {
-    let tx = self.db.begin().await?;
-    //check whether the latest fetched cctx is present in the database
-    //we fetch transaction in LIFO order
-    let latest_fetched = cctxs.first().unwrap();
-    let latest_loaded = self.query_cctx(latest_fetched.index.clone()).await?;
-
-
-    //if latest fetched cctx is in the db that means that the upper boundary is already covered and there is no new cctxs to save
-    if latest_loaded.is_some() {
-        tracing::debug!("latest cctx already exists, skipping");
-        return Ok(());
-    }
-    //now we need to check the lower boudary ( the earliest of the fetched cctxs)
-    let earliest_fetched = cctxs.last().unwrap();
-    let earliest_loaded = self.query_cctx(earliest_fetched.index.clone()).await?;
-    
-    if earliest_loaded.is_none() {
-            // the lower boundary is not covered, so there could be more transaction that happened earlier, that we haven't observed
-            //we have to save current pointer to continue fetching until we hit a known transaction
-            tracing::debug!("earliest cctx not found, creating new realtime watermark {}", next_key);
-            self.create_realtime_watermark(next_key.to_owned(),job_id).await?;
-    } 
-
-    self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
-    
-    tx.commit().await?;
-    Ok(())
-}
-#[instrument(level="info",skip_all)]
-pub async fn import_cctxs(
-    &self,
-    job_id: Uuid,
-    cctxs: Vec<CrossChainTx>,
-    next_key: &str,
-    watermark: watermark::Model,
-) -> anyhow::Result<()> {
-    let tx = self.db.begin().await?;
-    self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
-    self.move_watermark(watermark, next_key, &tx).await?;
-    tx.commit().await?;
-    Ok(())
-}
     /// Batch insert multiple CrossChainTx records with their child entities
-    #[instrument( skip_all,level="debug")]
+    #[instrument(skip_all, level = "debug")]
     pub async fn batch_insert_transactions(
         &self,
         job_id: Uuid,
@@ -433,9 +474,13 @@ pub async fn import_cctxs(
                     ))),
                     last_update_timestamp: ActiveValue::Set(
                         chrono::DateTime::from_timestamp(
-                            cctx.cctx_status.last_update_timestamp.parse::<i64>().unwrap_or(0),
+                            cctx.cctx_status
+                                .last_update_timestamp
+                                .parse::<i64>()
+                                .unwrap_or(0),
                             0,
-                        ).ok_or(anyhow::anyhow!("Invalid timestamp"))?
+                        )
+                        .ok_or(anyhow::anyhow!("Invalid timestamp"))?
                         .naive_utc(),
                     ),
                     is_abort_refunded: ActiveValue::Set(cctx.cctx_status.is_abort_refunded),
@@ -541,9 +586,13 @@ pub async fn import_cctxs(
                         cctx.revert_options.revert_address.clone(),
                     )),
                     call_on_revert: ActiveValue::Set(cctx.revert_options.call_on_revert),
-                    abort_address: ActiveValue::Set(Some(cctx.revert_options.abort_address.clone())),
+                    abort_address: ActiveValue::Set(Some(
+                        cctx.revert_options.abort_address.clone(),
+                    )),
                     revert_message: ActiveValue::Set(cctx.revert_options.revert_message.clone()),
-                    revert_gas_limit: ActiveValue::Set(cctx.revert_options.revert_gas_limit.clone()),
+                    revert_gas_limit: ActiveValue::Set(
+                        cctx.revert_options.revert_gas_limit.clone(),
+                    ),
                 };
                 revert_models.push(revert_model);
             }
@@ -566,7 +615,11 @@ pub async fn import_cctxs(
     }
 
     #[instrument(,level="debug",skip(self,job_id,watermark), fields(watermark_id = %watermark.id))]
-    pub async fn unlock_watermark(&self, watermark: watermark::Model,job_id: Uuid) -> anyhow::Result<()> {
+    pub async fn unlock_watermark(
+        &self,
+        watermark: watermark::Model,
+        job_id: Uuid,
+    ) -> anyhow::Result<()> {
         let res = watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark.id),
             processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
@@ -576,7 +629,6 @@ pub async fn import_cctxs(
         })
         .filter(watermark::Column::Id.eq(watermark.id))
         .exec(self.db.as_ref())
-        .instrument(tracing::debug_span!("unlocking watermark", watermark_id = %watermark.id))
         .await?;
 
         tracing::debug!("unlocked watermark: {:?}", res);
@@ -584,7 +636,11 @@ pub async fn import_cctxs(
     }
 
     #[instrument(,level="debug",skip(self,job_id), fields(watermark_id = %watermark.id))]
-    pub async fn lock_watermark(&self, watermark: watermark::Model,job_id: Uuid) -> anyhow::Result<()> {
+    pub async fn lock_watermark(
+        &self,
+        watermark: watermark::Model,
+        job_id: Uuid,
+    ) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark.id),
             processing_status: ActiveValue::Set(ProcessingStatus::Locked),
@@ -648,7 +704,11 @@ pub async fn import_cctxs(
 
         let statement = Statement::from_sql_and_values(DbBackend::Postgres, statement, vec![]);
 
-        let cctxs: Result<Vec<CctxShort>, sea_orm::DbErr> = self.db.query_all(statement).await?.iter()
+        let cctxs: Result<Vec<CctxShort>, sea_orm::DbErr> = self
+            .db
+            .query_all(statement)
+            .await?
+            .iter()
             .map(|r| {
                 std::result::Result::Ok(CctxShort {
                     id: r.try_get_by_index(0)?,
@@ -660,7 +720,7 @@ pub async fn import_cctxs(
             .collect::<Result<Vec<CctxShort>, sea_orm::DbErr>>();
 
         cctxs.map_err(|e| anyhow::anyhow!(e))
-        }
+    }
 
     pub async fn mark_cctx_tree_processed(
         &self,
@@ -692,7 +752,7 @@ pub async fn import_cctxs(
         Ok(())
     }
 
-    #[instrument(,level="debug",skip_all)]
+    #[instrument(,level="info",skip_all)]
     pub async fn update_cctx_status(
         &self,
         cctx_id: i32,
@@ -730,8 +790,9 @@ pub async fn import_cctxs(
         if let Some(cctx_status_row) = cctx_status::Entity::find()
             .filter(cctx_status::Column::CrossChainTxId.eq(cctx_id))
             .one(self.db.as_ref())
-            .await? {
-                cctx_status::Entity::update(cctx_status::ActiveModel {
+            .await?
+        {
+            cctx_status::Entity::update(cctx_status::ActiveModel {
                     id: ActiveValue::Set(cctx_status_row.id),
                     status: ActiveValue::Set(CctxStatusStatus::try_from(fetched_cctx.cctx_status.status.clone())
                         .map_err(|e| anyhow::anyhow!(e))?
@@ -747,10 +808,10 @@ pub async fn import_cctxs(
                 })
                 .filter(cctx_status::Column::Id.eq(cctx_status_row.id))
                 .exec(self.db.as_ref())
+                .instrument(tracing::info_span!("updating cctx_status", new_status = %fetched_cctx.cctx_status.status))
                 .await?;
-            }
+        }
 
-        
         //unlock cctx
         CrossChainTxEntity::Entity::update(CrossChainTxEntity::ActiveModel {
             id: ActiveValue::Set(cctx_id),
@@ -822,9 +883,13 @@ pub async fn import_cctxs(
             last_update_timestamp: ActiveValue::Set(
                 // parse NaiveDateTime from epoch seconds
                 chrono::DateTime::from_timestamp(
-                    tx.cctx_status.last_update_timestamp.parse::<i64>().unwrap_or(0),
+                    tx.cctx_status
+                        .last_update_timestamp
+                        .parse::<i64>()
+                        .unwrap_or(0),
                     0,
-                ).ok_or(anyhow::anyhow!("Invalid timestamp"))?
+                )
+                .ok_or(anyhow::anyhow!("Invalid timestamp"))?
                 .naive_utc(),
             ),
             is_abort_refunded: ActiveValue::Set(tx.cctx_status.is_abort_refunded),

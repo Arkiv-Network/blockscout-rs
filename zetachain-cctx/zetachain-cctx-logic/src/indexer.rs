@@ -35,7 +35,7 @@ enum IndexerJob {
     HistoricalDataFetch(watermark::Model, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
 }
 
-#[instrument(,level="debug",skip_all)]
+#[instrument(,level="info",skip_all)]
 async fn refresh_cctx_status(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -70,7 +70,7 @@ async fn level_data_gap(
     Ok(())
 }
 
-#[instrument(,level="info",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
+#[instrument(,level="debug",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
 async fn historical_sync(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -117,7 +117,7 @@ async fn refresh_status_and_link_related(
     job_id: Uuid,
 ) -> anyhow::Result<()> {
     refresh_cctx_status( database.clone(), client, &cctx).await?;
-    update_cctx_relations( database.clone(), client, &cctx).await?;
+    update_cctx_relations( database.clone(), client, &cctx, job_id).await?;
     Ok(())
 }
 
@@ -127,13 +127,15 @@ async fn update_cctx_relations(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
     cctx: &CctxShort,
+    job_id: Uuid,
 ) -> anyhow::Result<()> {
     // Fetch children using the inbound hash to CCTX data endpoint
     let children_response = client
         .get_inbound_hash_to_cctx_data(&cctx.index)
         .await?;
     
-    database.traverse_and_update_tree_relationships(children_response.cross_chain_txs, cctx).await?;
+    tracing::info!("children_response: {:?}", children_response);
+    database.traverse_and_update_tree_relationships(children_response.cross_chain_txs, cctx, job_id).await?;
 
     Ok(())
 }
@@ -206,6 +208,7 @@ impl Indexer {
                 let batch_id = Uuid::new_v4();
                 match self.database.query_cctxs_for_status_update(status_update_batch_size, batch_id).await {
                     std::result::Result::Ok(cctxs) => {
+                        tracing::info!("found {:?} cctxs for status update", cctxs);
                         for cctx in cctxs {
                             let job_id = Uuid::new_v4();
                             tracing::debug!("job_id: {} cctx_index: {}", job_id, cctx.index);

@@ -88,7 +88,7 @@ impl Client {
         Ok(body.cross_chain_tx)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level="debug",skip_all)]
     pub async fn list_cctxs(
         &self,
         pagination_key: Option<&str>,
@@ -126,7 +126,7 @@ impl Client {
         Ok(body)
     }
 
-    #[instrument(level="debug",skip_all)]
+    #[instrument(level="info",skip_all)]
     pub async fn get_inbound_hash_to_cctx_data(
         &self,
         cctx_index: &str,
