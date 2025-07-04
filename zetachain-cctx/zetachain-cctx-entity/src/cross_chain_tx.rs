@@ -13,6 +13,7 @@ pub struct Model {
     #[sea_orm(unique)]
     pub index: String,
     pub zeta_fees: String,
+    pub retries_number: i32,
     pub processing_status: ProcessingStatus,
     #[sea_orm(column_type = "Text", nullable)]
     pub relayed_message: Option<String>,

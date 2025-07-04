@@ -379,6 +379,7 @@ pub async fn import_cctxs(
                 id: ActiveValue::NotSet,
                 creator: ActiveValue::Set(cctx.creator.clone()),
                 index: ActiveValue::Set(cctx.index.clone()),
+                retries_number: ActiveValue::Set(0),
                 processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
                 zeta_fees: ActiveValue::Set(cctx.zeta_fees.clone()),
                 relayed_message: ActiveValue::Set(Some(cctx.relayed_message.clone())),
@@ -628,17 +629,18 @@ pub async fn import_cctxs(
         let statement = format!(
             r#"
         WITH cctxs AS (
-            SELECT cctx.id, cctx.index, cctx.last_status_update_timestamp
+            SELECT cctx.id
             FROM cross_chain_tx cctx
             JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
             WHERE (cs.status IN ('PendingInbound', 'PendingOutbound', 'PendingRevert') OR cctx.tree_query_flag = false)
             AND cctx.processing_status = 'unlocked'::processing_status
-            ORDER BY cctx.last_status_update_timestamp DESC
+            AND cctx.last_status_update_timestamp > NOW() - INTERVAL '1 minute' * POWER(2, cctx.retries_number)
+            ORDER BY cctx.last_status_update_timestamp ASC,cs.created_timestamp DESC
             LIMIT {batch_size}
             FOR UPDATE SKIP LOCKED
         )
         UPDATE cross_chain_tx cctx
-        SET processing_status = 'locked'::processing_status, last_status_update_timestamp = NOW()
+        SET processing_status = 'locked'::processing_status, last_status_update_timestamp = NOW(), retries_number = retries_number + 1
         WHERE id IN (SELECT id FROM cctxs)
         RETURNING id, index, root_id, depth
         "#
@@ -779,6 +781,7 @@ pub async fn import_cctxs(
             id: ActiveValue::NotSet,
             creator: ActiveValue::Set(tx.creator),
             index: ActiveValue::Set(tx.index),
+            retries_number: ActiveValue::Set(0),
             processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             zeta_fees: ActiveValue::Set(tx.zeta_fees),
             relayed_message: ActiveValue::Set(Some(tx.relayed_message)),

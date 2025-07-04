@@ -98,6 +98,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(CrossChainTx::Creator).string().not_null())
                     .col(ColumnDef::new(CrossChainTx::Index).string().not_null())
                     .col(ColumnDef::new(CrossChainTx::ZetaFees).string().not_null())
+                    .col(ColumnDef::new(CrossChainTx::RetriesNumber).integer().not_null().default(0))
                     .col(
                         ColumnDef::new(CrossChainTx::ProcessingStatus)
                             .enumeration("processing_status", ["locked", "unlocked","failed"])
@@ -550,6 +551,7 @@ enum CrossChainTx {
     ParentId,
     TreeQueryFlag,
     Depth,
+    RetriesNumber,
 }
 
 #[derive(Iden)]
