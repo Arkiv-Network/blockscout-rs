@@ -3,11 +3,11 @@ use std::sync::Arc;
 use crate::models::{self, CctxShort, CrossChainTx};
 use anyhow::Ok;
 use chrono::Utc;
-use sea_orm::ConnectionTrait;
 use sea_orm::{
     ActiveValue, DatabaseConnection, DatabaseTransaction, DbBackend, Statement, TransactionTrait,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{Condition, ConnectionTrait};
 use tracing::{instrument, Instrument};
 use uuid::Uuid;
 use zetachain_cctx_entity::sea_orm_active_enums::ProcessingStatus;
@@ -68,7 +68,10 @@ impl ZetachainCctxDatabase {
         Self { db }
     }
 
-    pub async fn mark_watermark_as_failed(&self, watermark: watermark::Model) -> anyhow::Result<()> {
+    pub async fn mark_watermark_as_failed(
+        &self,
+        watermark: watermark::Model,
+    ) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Set(watermark.id),
             processing_status: ActiveValue::Set(ProcessingStatus::Failed),
@@ -103,40 +106,58 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    pub async fn get_cctx_ids_by_index(
+    pub async fn find_outdated_children_by_index(
         &self,
         cctxs: Vec<models::CrossChainTx>,
-    ) -> anyhow::Result<Vec<(models::CrossChainTx, Option<i32>)>> {
+        parent_id: i32,
+        root_id: i32,
+    ) -> anyhow::Result<(Vec<models::CrossChainTx>, Vec<i32>)> {
         if cctxs.is_empty() {
-            return Ok(vec![]);
+            return Ok((Vec::new(), Vec::new()));
         }
         let indices = cctxs
             .iter()
             .map(|cctx| cctx.index.clone())
             .collect::<Vec<String>>();
-        let cctx = CrossChainTxEntity::Entity::find()
-            .filter(CrossChainTxEntity::Column::Index.is_in(indices.clone()))
+
+        // Query database for existing CCTXs by their indices
+        let need_update = CrossChainTxEntity::Entity::find()
+            .filter(
+                Condition::all()
+                .add(CrossChainTxEntity::Column::Index.is_in(indices.clone()))
+                .add(
+                    Condition::any()
+                    .add(CrossChainTxEntity::Column::ParentId.ne(parent_id))
+                    .add(CrossChainTxEntity::Column::RootId.ne(root_id)),
+                )
+            )
             .all(self.db.as_ref())
             .await?;
 
-        // Create a HashMap for quick lookup of existing indices
-        let existing_indices: std::collections::HashMap<String, i32> = cctx
+        // Create a set of existing indices for quick lookup
+        let need_update_indices: std::collections::HashSet<String> = need_update
             .iter()
-            .map(|cctx| (cctx.index.clone(), cctx.id))
+            .map(|cctx| cctx.index.clone())
             .collect();
 
-        // Map each input index to (index, Option<id>)
-        let result = cctxs
-            .into_iter()
-            .map(|cctx| {
-                let id = existing_indices.get(&cctx.index).copied();
-                (cctx, id)
-            })
-            .collect();
+        // Separate absent and existing CCTXs
+        let mut need_to_import = Vec::new();
+        let mut need_to_update_ids = Vec::new();
 
-        Ok(result)
+        for cctx in cctxs {
+            if !need_update_indices.contains(&cctx.index) {
+                // Find the corresponding existing CCTX to get its ID
+                if let Some(child) = need_update.iter().find(|e| e.index == cctx.index) {
+                    need_to_update_ids.push(child.id);
+                }
+            } else {
+                need_to_import.push(cctx);
+            }
+        }
+        Ok((need_to_import, need_to_update_ids))
     }
 
+    #[instrument(level = "info", skip_all)]
     pub async fn get_cctx_ids_by_parent_id(
         &self,
         parent_ids: Vec<i32>,
@@ -145,18 +166,25 @@ impl ZetachainCctxDatabase {
             .filter(CrossChainTxEntity::Column::ParentId.is_in(parent_ids))
             .all(self.db.as_ref())
             .await?;
+
         Ok(cctx.iter().map(|cctx| cctx.id).collect())
     }
 
-    #[instrument(level = "debug", skip_all)]
     pub async fn update_multiple_related_cctxs(
         &self,
         cctx_ids: Vec<i32>,
         root_id: i32,
         depth: i32,
         parent_id: i32,
+        job_id: Uuid,
         tx: &DatabaseTransaction,
     ) -> anyhow::Result<()> {
+        tracing::info!(
+            "job_id: {} updating multiple related cctxs: {:?} setting parent_id to {:?}",
+            job_id,
+            cctx_ids,
+            parent_id
+        );
         CrossChainTxEntity::Entity::update_many()
             .filter(CrossChainTxEntity::Column::Id.is_in(cctx_ids))
             .set(CrossChainTxEntity::ActiveModel {
@@ -164,6 +192,7 @@ impl ZetachainCctxDatabase {
                 depth: ActiveValue::Set(depth),
                 parent_id: ActiveValue::Set(Some(parent_id)),
                 last_status_update_timestamp: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+                updated_by: ActiveValue::Set(job_id.to_string()),
                 ..Default::default()
             })
             .exec(tx)
@@ -202,56 +231,60 @@ impl ZetachainCctxDatabase {
         job_id: Uuid,
     ) -> anyhow::Result<()> {
         let cctx_status = self.get_cctx_status(cctx.id).await?;
-        let children_results = self.get_cctx_ids_by_index(children_cctxs).await?;
-        tracing::info!("children_results: {:?}", children_results);
+        let root_id = cctx.root_id.unwrap_or(cctx.id);
+        let (need_to_import, need_to_update_ids) =
+            self.find_outdated_children_by_index(children_cctxs, cctx.id, root_id).await?;
+        tracing::info!(
+            "need_to_import: {:?}, need_to_update_ids: {:?}",
+            need_to_import,
+            need_to_update_ids
+        );
 
         let tx = self.db.begin().await?;
 
-        let new_root_id = cctx.root_id.unwrap_or(cctx.id);
+        let mut cctx_to_be_updated = need_to_update_ids.clone();
 
-        for (child, child_id) in children_results {
-            tracing::info!("iterating before update: new_root_id: {:?}, child: {:?}, child_id: {:?}", new_root_id, child.index, child_id);
-            if child_id.is_some() {
-                self.update_single_related_cctx(
-                    &child.index,
-                    child_id.unwrap(),
-                    new_root_id,
-                    cctx.depth + 1,
-                    cctx.id,
-                    &tx,
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to update single related cctx: {}", e))?;
-                let mut frontier = vec![child_id.unwrap()];
-                let mut current_depth = cctx.depth + 1;
+        //First we update parent_id for the direct descendants
+        //The root_id for both direct and indirect descendants will be updated all at once
+        CrossChainTxEntity::Entity::update_many()
+            .filter(CrossChainTxEntity::Column::Id.is_in(cctx_to_be_updated.iter().cloned()))
+            .set(CrossChainTxEntity::ActiveModel {
+                parent_id: ActiveValue::Set(Some(cctx.id)),
+                depth: ActiveValue::Set(cctx.depth + 1),
+                ..Default::default()
+            })
+            .exec(&tx)
+            .await?;
 
-                loop {
-                    let new_frontier = self.get_cctx_ids_by_parent_id(frontier.clone()).await?;
-                    if new_frontier.is_empty() {
-                        break;
-                    }
-                    self.update_multiple_related_cctxs(frontier, new_root_id, current_depth, cctx.id, &tx)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Failed to update multiple related cctxs: {}", e))?;
-                    frontier = new_frontier;
-                    current_depth += 1;
-                }
-            } else {
-                self.insert_transaction_with_tree_relationships(
-                    child,
-                    job_id,
-                    new_root_id,
-                    cctx.id,
-                    cctx.depth + 1,
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to insert transaction with tree relationships: {}", e))?;
+        let mut frontier = need_to_update_ids.clone();
+
+        loop {
+            let mut new_frontier: Vec<i32> = vec![];
+            for id in frontier.iter() {
+                let children = self.get_cctx_ids_by_parent_id(vec![*id]).await?;
+                new_frontier.extend(children.into_iter());
             }
+            if new_frontier.is_empty() {
+                break;
+            }
+            frontier = new_frontier;
+            cctx_to_be_updated.extend(frontier.clone().into_iter());
         }
+
+        //Now we update the root_id for all of the descendants
+        CrossChainTxEntity::Entity::update_many()
+            .filter(CrossChainTxEntity::Column::Id.is_in(cctx_to_be_updated.iter().cloned()))
+            .set(CrossChainTxEntity::ActiveModel {
+                root_id: ActiveValue::Set(Some(root_id)),
+                ..Default::default()
+            })
+            .exec(&tx)
+            .await?;
 
         // If the cctx is mined, there is no need to do any additional requests
         if cctx_status.status == CctxStatusStatus::OutboundMined {
-            self.mark_cctx_tree_processed(cctx.id, job_id, &cctx.index, &tx).await?;
+            self.mark_cctx_tree_processed(cctx.id, job_id, &cctx.index, &tx)
+                .await?;
             tracing::debug!(
                 "No children found for CCTX {}, marked as processed",
                 cctx.index
@@ -378,7 +411,7 @@ impl ZetachainCctxDatabase {
         cctxs: Vec<CrossChainTx>,
         next_key: &str,
         watermark: watermark::Model,
-    ) -> anyhow::Result<(ProcessingStatus,String)> {
+    ) -> anyhow::Result<(ProcessingStatus, String)> {
         let earliest_fetched = cctxs.last().unwrap();
         let latest_synced = self.query_cctx(earliest_fetched.index.clone()).await?;
         if latest_synced.is_some() {
@@ -386,25 +419,28 @@ impl ZetachainCctxDatabase {
                 "last synced cctx {} is present, marking as done",
                 earliest_fetched.index
             );
-            return Ok((ProcessingStatus::Done,watermark.pointer));
+            return Ok((ProcessingStatus::Done, watermark.pointer));
         } else {
             let tx = self.db.begin().await?;
             self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
             self.move_watermark(watermark, next_key, &tx).await?;
             tx.commit().await?;
-            return Ok((ProcessingStatus::Unlocked,next_key.to_owned()));
+            return Ok((ProcessingStatus::Unlocked, next_key.to_owned()));
         }
-        
     }
 
-
-    pub async fn update_watermark(&self, watermark: watermark::Model, pointer: &str, status: ProcessingStatus) -> anyhow::Result<()> {
+    pub async fn update_watermark(
+        &self,
+        watermark: watermark::Model,
+        pointer: &str,
+        status: ProcessingStatus,
+    ) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark.id),
             processing_status: ActiveValue::Set(status),
             pointer: ActiveValue::Set(pointer.to_owned()),
             ..Default::default()
-        })  
+        })
         .filter(watermark::Column::Id.eq(watermark.id))
         .exec(self.db.as_ref())
         .await
@@ -459,7 +495,8 @@ impl ZetachainCctxDatabase {
     ) -> anyhow::Result<()> {
         let tx = self.db.begin().await?;
         self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
-        self.update_watermark(watermark, next_key, ProcessingStatus::Unlocked).await?;
+        self.update_watermark(watermark, next_key, ProcessingStatus::Unlocked)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -500,6 +537,7 @@ impl ZetachainCctxDatabase {
                 root_id: ActiveValue::Set(None), //TODO: link to self
                 parent_id: ActiveValue::Set(None), //TODO: link to self
                 depth: ActiveValue::Set(0),
+                updated_by: ActiveValue::Set(job_id.to_string()),
             };
             cctx_models.push(cctx_model);
         }
@@ -823,7 +861,6 @@ impl ZetachainCctxDatabase {
         "#
         );
 
-      
         let statement = Statement::from_sql_and_values(DbBackend::Postgres, statement, vec![]);
 
         let cctxs: Result<Vec<CctxShort>, sea_orm::DbErr> = self
@@ -981,6 +1018,7 @@ impl ZetachainCctxDatabase {
             root_id: ActiveValue::Set(Some(root_id)),
             parent_id: ActiveValue::Set(Some(parent_id)),
             depth: ActiveValue::Set(depth),
+            updated_by: ActiveValue::Set(job_id.to_string()),
         };
 
         let tx_result = CrossChainTxEntity::Entity::insert(cctx_model)
@@ -1004,7 +1042,9 @@ impl ZetachainCctxDatabase {
                 CctxStatusStatus::try_from(cctx.cctx_status.status.clone())
                     .map_err(|e| anyhow::anyhow!(e))?,
             ),
-            status_message: ActiveValue::Set(Some(sanitize_string(cctx.cctx_status.status_message))),
+            status_message: ActiveValue::Set(Some(sanitize_string(
+                cctx.cctx_status.status_message,
+            ))),
             error_message: ActiveValue::Set(Some(sanitize_string(cctx.cctx_status.error_message))),
             last_update_timestamp: ActiveValue::Set(
                 // parse NaiveDateTime from epoch seconds
@@ -1023,8 +1063,9 @@ impl ZetachainCctxDatabase {
             error_message_revert: ActiveValue::Set(Some(sanitize_string(
                 cctx.cctx_status.error_message_revert,
             ))),
-            error_message_abort: ActiveValue::Set(Some(sanitize_string(cctx.cctx_status.error_message_abort))
-            ),
+            error_message_abort: ActiveValue::Set(Some(sanitize_string(
+                cctx.cctx_status.error_message_abort,
+            ))),
         };
         cctx_status::Entity::insert(status_model)
             .exec(&tx)
@@ -1041,12 +1082,15 @@ impl ZetachainCctxDatabase {
             sender_chain_id: ActiveValue::Set(cctx.inbound_params.sender_chain_id),
             tx_origin: ActiveValue::Set(cctx.inbound_params.tx_origin),
             coin_type: ActiveValue::Set(
-                CoinType::try_from(cctx.inbound_params.coin_type).map_err(|e| anyhow::anyhow!(e))?,
+                CoinType::try_from(cctx.inbound_params.coin_type)
+                    .map_err(|e| anyhow::anyhow!(e))?,
             ),
             asset: ActiveValue::Set(Some(cctx.inbound_params.asset)),
             amount: ActiveValue::Set(cctx.inbound_params.amount),
             observed_hash: ActiveValue::Set(cctx.inbound_params.observed_hash),
-            observed_external_height: ActiveValue::Set(cctx.inbound_params.observed_external_height),
+            observed_external_height: ActiveValue::Set(
+                cctx.inbound_params.observed_external_height,
+            ),
             ballot_index: ActiveValue::Set(cctx.inbound_params.ballot_index),
             finalized_zeta_height: ActiveValue::Set(cctx.inbound_params.finalized_zeta_height),
             tx_finalization_status: ActiveValue::Set(
