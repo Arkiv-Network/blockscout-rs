@@ -139,6 +139,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(0),
                     )
+                    .col(ColumnDef::new(CrossChainTx::UpdatedBy).string().not_null())
                     .to_owned(),
             )
             .await?;
@@ -555,6 +556,7 @@ enum CrossChainTx {
     ParentId,
     Depth,
     RetriesNumber,
+    UpdatedBy
 }
 
 #[derive(Iden)]

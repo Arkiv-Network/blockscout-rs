@@ -22,6 +22,7 @@ pub struct Model {
     pub root_id: Option<i32>,
     pub parent_id: Option<i32>,
     pub depth: i32,
+    pub updated_by: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
