@@ -7,13 +7,13 @@ use sea_orm::{
     ActiveValue, DatabaseConnection, DatabaseTransaction, DbBackend, Statement, TransactionTrait,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
-use sea_orm::{Condition, ConnectionTrait};
+use sea_orm::ConnectionTrait;
 use tracing::{instrument, Instrument};
 use uuid::Uuid;
 use zetachain_cctx_entity::sea_orm_active_enums::ProcessingStatus;
 use zetachain_cctx_entity::{
-    cctx_status, cross_chain_tx as CrossChainTxEntity, inbound_params,
-    outbound_params as OutboundParamsEntity, revert_options,
+    cctx_status, cross_chain_tx as CrossChainTxEntity, inbound_params as InboundParamsEntity,
+    outbound_params as OutboundParamsEntity, revert_options as RevertOptionsEntity,
     sea_orm_active_enums::{
         CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, Kind, ProtocolContractVersion,
         TxFinalizationStatus,
@@ -36,17 +36,16 @@ fn sanitize_string(input: String) -> String {
         .replace('\u{FFFD}', "?") // Replace replacement character with question mark
 }
 
-// Add this struct to hold the complete CCTX data
+
 #[derive(Debug)]
 pub struct CompleteCctx {
     pub cctx: CrossChainTxEntity::Model,
     pub status: cctx_status::Model,
-    pub inbound: inbound_params::Model,
+    pub inbound: InboundParamsEntity::Model,
     pub outbounds: Vec<OutboundParamsEntity::Model>,
-    pub revert: revert_options::Model,
+    pub revert: RevertOptionsEntity::Model,
 }
 
-// Add this struct for the simplified CCTX list view
 #[derive(Debug)]
 pub struct CctxListItem {
     pub index: String,
@@ -254,7 +253,6 @@ impl ZetachainCctxDatabase {
             let mut new_frontier: Vec<i32> = vec![];
             for id in frontier.iter() {
                 let children = self.get_cctx_ids_by_parent_id(vec![*id], &tx).await?;
-                println!("children: {:?}", children);
                 new_frontier.extend(children.into_iter());
             }
             if new_frontier.is_empty() {
@@ -508,10 +506,10 @@ impl ZetachainCctxDatabase {
     pub async fn batch_insert_transactions(
         &self,
         job_id: Uuid,
-        transactions: &Vec<CrossChainTx>,
+        cctxs: &Vec<CrossChainTx>,
         tx: &DatabaseTransaction,
     ) -> anyhow::Result<()> {
-        if transactions.is_empty() {
+        if cctxs.is_empty() {
             return Ok(());
         }
 
@@ -523,7 +521,7 @@ impl ZetachainCctxDatabase {
         let mut revert_models = Vec::new();
 
         // First, prepare all the parent records
-        for cctx in transactions {
+        for cctx in cctxs {
             let cctx_model = CrossChainTxEntity::ActiveModel {
                 id: ActiveValue::NotSet,
                 creator: ActiveValue::Set(cctx.creator.clone()),
@@ -564,7 +562,7 @@ impl ZetachainCctxDatabase {
             .collect();
 
         // Now prepare child records for each transaction
-        for cctx in transactions {
+        for cctx in cctxs {
             if let Some(&tx_id) = index_to_id.get(&cctx.index) {
                 // Prepare cctx_status
                 let status_model = cctx_status::ActiveModel {
@@ -605,7 +603,7 @@ impl ZetachainCctxDatabase {
                 status_models.push(status_model);
 
                 // Prepare inbound_params
-                let inbound_model = inbound_params::ActiveModel {
+                let inbound_model = InboundParamsEntity::ActiveModel {
                     id: ActiveValue::NotSet,
                     cross_chain_tx_id: ActiveValue::Set(tx_id),
                     sender: ActiveValue::Set(cctx.inbound_params.sender.clone()),
@@ -687,7 +685,7 @@ impl ZetachainCctxDatabase {
                 }
 
                 // Prepare revert_options
-                let revert_model = revert_options::ActiveModel {
+                let revert_model = RevertOptionsEntity::ActiveModel {
                     id: ActiveValue::NotSet,
                     cross_chain_tx_id: ActiveValue::Set(tx_id),
                     revert_address: ActiveValue::Set(Some(
@@ -716,6 +714,39 @@ impl ZetachainCctxDatabase {
                 )
                 .exec(tx)
                 .instrument(tracing::debug_span!("inserting cctx_status"))
+                .await?;
+        }
+        if !inbound_models.is_empty() {
+            InboundParamsEntity::Entity::insert_many(inbound_models)
+                .on_conflict(
+                    sea_orm::sea_query::OnConflict::column(InboundParamsEntity::Column::CrossChainTxId)
+                        .do_nothing()
+                        .to_owned(),
+                )
+                .exec(tx)
+                .instrument(tracing::info_span!("inserting inbound_params"))
+                .await?;
+        }
+        if !outbound_models.is_empty() {
+            OutboundParamsEntity::Entity::insert_many(outbound_models)
+                .on_conflict(
+                    sea_orm::sea_query::OnConflict::column(OutboundParamsEntity::Column::CrossChainTxId)
+                        .do_nothing()
+                        .to_owned(),
+                )
+                .exec(tx)
+                .instrument(tracing::debug_span!("inserting outbound_params"))
+                .await?;
+        }
+        if !revert_models.is_empty() {
+            RevertOptionsEntity::Entity::insert_many(revert_models)
+                .on_conflict(
+                    sea_orm::sea_query::OnConflict::column(RevertOptionsEntity::Column::CrossChainTxId)
+                        .do_nothing()
+                        .to_owned(),
+                )
+                .exec(tx)
+                .instrument(tracing::debug_span!("inserting revert_options"))
                 .await?;
         }
 
@@ -1038,7 +1069,7 @@ impl ZetachainCctxDatabase {
                     .to_owned(),
             )
             .exec(tx)
-            .instrument(tracing::debug_span!("inserting cctx", index = %index, job_id = %job_id))
+            .instrument(tracing::info_span!("inserting cctx", index = %index, origin_tx =  %cctx.inbound_params.tx_origin, job_id = %job_id))
             .await?;
 
         // Get the inserted tx id
@@ -1085,7 +1116,7 @@ impl ZetachainCctxDatabase {
             .await?;
 
         // Insert inbound_params
-        let inbound_model = inbound_params::ActiveModel {
+        let inbound_model = InboundParamsEntity::ActiveModel {
             id: ActiveValue::NotSet,
             cross_chain_tx_id: ActiveValue::Set(tx_id),
             sender: ActiveValue::Set(cctx.inbound_params.sender),
@@ -1117,7 +1148,7 @@ impl ZetachainCctxDatabase {
                     .map_err(|e| anyhow::anyhow!(e))?,
             ),
         };
-        inbound_params::Entity::insert(inbound_model)
+        InboundParamsEntity::Entity::insert(inbound_model)
             .exec(tx)
             .instrument(
                 tracing::debug_span!("inserting inbound_params", index = %index, job_id = %job_id),
@@ -1168,7 +1199,7 @@ impl ZetachainCctxDatabase {
         }
 
         // Insert revert_options
-        let revert_model = revert_options::ActiveModel {
+        let revert_model = RevertOptionsEntity::ActiveModel {
             id: ActiveValue::NotSet,
             cross_chain_tx_id: ActiveValue::Set(tx_id),
             revert_address: ActiveValue::Set(Some(cctx.revert_options.revert_address)),
@@ -1177,7 +1208,7 @@ impl ZetachainCctxDatabase {
             revert_message: ActiveValue::Set(cctx.revert_options.revert_message),
             revert_gas_limit: ActiveValue::Set(cctx.revert_options.revert_gas_limit),
         };
-        revert_options::Entity::insert(revert_model)
+        RevertOptionsEntity::Entity::insert(revert_model)
             .exec(tx)
             .instrument(
                 tracing::debug_span!("inserting revert_options", index = %index, job_id = %job_id),
@@ -1205,8 +1236,8 @@ impl ZetachainCctxDatabase {
             .one(self.db.as_ref())
             .await?;
 
-        let inbound = inbound_params::Entity::find()
-            .filter(inbound_params::Column::CrossChainTxId.eq(cctx.id))
+        let inbound = InboundParamsEntity::Entity::find()
+            .filter(InboundParamsEntity::Column::CrossChainTxId.eq(cctx.id))
             .one(self.db.as_ref())
             .await?;
 
@@ -1215,8 +1246,8 @@ impl ZetachainCctxDatabase {
             .all(self.db.as_ref())
             .await?;
 
-        let revert = revert_options::Entity::find()
-            .filter(revert_options::Column::CrossChainTxId.eq(cctx.id))
+        let revert = RevertOptionsEntity::Entity::find()
+            .filter(RevertOptionsEntity::Column::CrossChainTxId.eq(cctx.id))
             .one(self.db.as_ref())
             .await?;
 
@@ -1267,8 +1298,8 @@ impl ZetachainCctxDatabase {
                 .await?;
 
             // Get inbound params
-            let inbound = inbound_params::Entity::find()
-                .filter(inbound_params::Column::CrossChainTxId.eq(cctx.id))
+            let inbound = InboundParamsEntity::Entity::find()
+                .filter(InboundParamsEntity::Column::CrossChainTxId.eq(cctx.id))
                 .one(self.db.as_ref())
                 .await?;
 

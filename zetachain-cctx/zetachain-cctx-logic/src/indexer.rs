@@ -325,7 +325,7 @@ impl Indexer {
                     match job {
                         IndexerJob::StatusUpdate(cctx, job_id) => {
                             if let Err(e) =  refresh_status_and_link_related(database.clone(), &client, &cctx, job_id).await {
-                                tracing::error!(error = %e, job_id = %job_id, "Failed to refresh status and link related cctx");
+                                tracing::error!(error = %e, job_id = %job_id, index = %cctx.index, "Failed to refresh status and link related cctx");
                                 if cctx.retries_number == retry_threshold as i32 {
                                     database.mark_cctx_as_failed(&cctx).await.unwrap();
                                 } else {

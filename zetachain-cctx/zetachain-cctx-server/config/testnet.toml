@@ -21,6 +21,8 @@ concurrency=10
 historical_batch_size=100
 status_update_batch_size = 5
 realtime_fetch_batch_size = 10
+retry_threshold = 10
+failed_cctxs_polling_interval = 100000
 
 [rpc]
 url = "https://zetachain-athens.g.allthatnode.com/archive/rest/a0edcf7bca3748b0a115df6163411457/zeta-chain/"

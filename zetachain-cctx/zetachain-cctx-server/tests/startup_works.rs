@@ -10,7 +10,7 @@ use zetachain_cctx_logic::client::{Client, RpcSettings};
 
 #[tokio::test]
 #[ignore = "Needs database to run"]
-async fn test_historical_sync() {
+async fn test_startup_works() {
     let db = helpers::init_db(
         "test",
         "startup_works",

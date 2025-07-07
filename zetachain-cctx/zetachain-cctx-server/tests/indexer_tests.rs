@@ -17,6 +17,7 @@ use wiremock::{
 use zetachain_cctx_entity::cctx_status::{
     self, Column as CctxStatusColumn, Entity as CctxStatusEntity,
 };
+use zetachain_cctx_entity::{inbound_params, outbound_params, revert_options};
 use zetachain_cctx_entity::sea_orm_active_enums::CctxStatusStatus::OutboundMined;
 use zetachain_cctx_entity::sea_orm_active_enums::{
     CoinType, ProcessingStatus, ProtocolContractVersion,
@@ -142,10 +143,6 @@ async fn test_historical_sync_updates_pointer() {
     // Initialize database with historical watermark
     let db_conn = db.client();
 
-    cross_chain_tx::Entity::delete_many()
-        .exec(db_conn.as_ref())
-        .await
-        .unwrap();
 
     let watermark_model = watermark::ActiveModel {
         id: ActiveValue::NotSet,
@@ -217,30 +214,46 @@ async fn test_historical_sync_updates_pointer() {
         .await
         .unwrap();
 
+
+
     // We expect 6 total CCTX records (2 from each page)
     assert_eq!(cctx_count, 6);
 
     // // Verify specific CCTX records exist
-    let first_page_cctx = cross_chain_tx::Entity::find()
-        .filter(cross_chain_tx::Column::Index.eq("page_1_index_1"))
-        .one(db_conn.as_ref())
-        .await
-        .unwrap();
-    assert!(first_page_cctx.is_some());
-
-    let second_page_cctx = cross_chain_tx::Entity::find()
-        .filter(cross_chain_tx::Column::Index.eq("page_2_index_1"))
-        .one(db_conn.as_ref())
-        .await
-        .unwrap();
-    assert!(second_page_cctx.is_some());
-
-    let third_page_cctx = cross_chain_tx::Entity::find()
-        .filter(cross_chain_tx::Column::Index.eq("page_3_index_1"))
-        .one(db_conn.as_ref())
-        .await
-        .unwrap();
-    assert!(third_page_cctx.is_some());
+    for index in ["page_1_index_1", "page_1_index_2", "page_2_index_1", "page_2_index_2", "page_3_index_1", "page_3_index_2"] {
+        let cctx = cross_chain_tx::Entity::find()
+            .filter(cross_chain_tx::Column::Index.eq(index))
+            .one(db_conn.as_ref())
+            .await
+            .unwrap();
+        assert!(cctx.is_some());
+        let cctx = cctx.unwrap();
+        let cctx_id = cctx.id;
+        let inbound = inbound_params::Entity::find()
+            .filter(inbound_params::Column::CrossChainTxId.eq(cctx_id))
+            .one(db_conn.as_ref())
+            .await
+            .unwrap();
+        assert!(inbound.is_some());
+        let outbound = outbound_params::Entity::find()
+            .filter(outbound_params::Column::CrossChainTxId.eq(cctx_id))
+            .one(db_conn.as_ref())
+            .await
+            .unwrap();
+        assert!(outbound.is_some());
+        let status = cctx_status::Entity::find()
+            .filter(cctx_status::Column::CrossChainTxId.eq(cctx_id))
+            .one(db_conn.as_ref())
+            .await
+            .unwrap();
+        assert!(status.is_some());
+        let revert = revert_options::Entity::find()
+            .filter(revert_options::Column::CrossChainTxId.eq(cctx_id))
+            .one(db_conn.as_ref())
+            .await
+            .unwrap();
+        assert!(revert.is_some());
+    }
 }
 
 #[tokio::test]

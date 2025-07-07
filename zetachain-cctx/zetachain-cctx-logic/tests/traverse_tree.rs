@@ -1,4 +1,3 @@
-use std::sync::Arc;
 
 use blockscout_service_launcher::test_database::TestDbGuard;
 use chrono::Utc;
