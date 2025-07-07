@@ -111,6 +111,7 @@ impl ZetachainCctxDatabase {
         cctxs: Vec<models::CrossChainTx>,
         parent_id: i32,
         root_id: i32,
+        tx: &DatabaseTransaction,
     ) -> anyhow::Result<(Vec<models::CrossChainTx>, Vec<i32>)> {
         if cctxs.is_empty() {
             return Ok((Vec::new(), Vec::new()));
@@ -119,33 +120,32 @@ impl ZetachainCctxDatabase {
             .iter()
             .map(|cctx| cctx.index.clone())
             .collect::<Vec<String>>();
+        println!("indices: {:?}", indices);
 
         // Query database for existing CCTXs by their indices
         let need_update = CrossChainTxEntity::Entity::find()
             .filter(
                 Condition::all()
-                .add(CrossChainTxEntity::Column::Index.is_in(indices.clone()))
-                .add(
-                    Condition::any()
-                    .add(CrossChainTxEntity::Column::ParentId.ne(parent_id))
-                    .add(CrossChainTxEntity::Column::RootId.ne(root_id)),
-                )
+                    .add(CrossChainTxEntity::Column::Index.is_in(indices.clone()))
+                    .add(
+                        Condition::any()
+                            .add(CrossChainTxEntity::Column::ParentId.ne(parent_id))
+                            .add(CrossChainTxEntity::Column::RootId.ne(root_id)),
+                    ),
             )
-            .all(self.db.as_ref())
+            .all(tx)
             .await?;
-
+        println!("need_update: {:?}", need_update);
         // Create a set of existing indices for quick lookup
-        let need_update_indices: std::collections::HashSet<String> = need_update
-            .iter()
-            .map(|cctx| cctx.index.clone())
-            .collect();
-
+        let need_update_indices: std::collections::HashSet<String> =
+            need_update.iter().map(|cctx| cctx.index.clone()).collect();
+        println!("need_update_indices: {:?}", need_update_indices);
         // Separate absent and existing CCTXs
         let mut need_to_import = Vec::new();
         let mut need_to_update_ids = Vec::new();
 
         for cctx in cctxs {
-            if !need_update_indices.contains(&cctx.index) {
+            if need_update_indices.contains(&cctx.index) {
                 // Find the corresponding existing CCTX to get its ID
                 if let Some(child) = need_update.iter().find(|e| e.index == cctx.index) {
                     need_to_update_ids.push(child.id);
@@ -161,10 +161,11 @@ impl ZetachainCctxDatabase {
     pub async fn get_cctx_ids_by_parent_id(
         &self,
         parent_ids: Vec<i32>,
+        tx: &DatabaseTransaction,
     ) -> anyhow::Result<Vec<i32>> {
         let cctx = CrossChainTxEntity::Entity::find()
             .filter(CrossChainTxEntity::Column::ParentId.is_in(parent_ids))
-            .all(self.db.as_ref())
+            .all(tx)
             .await?;
 
         Ok(cctx.iter().map(|cctx| cctx.id).collect())
@@ -232,22 +233,25 @@ impl ZetachainCctxDatabase {
     ) -> anyhow::Result<()> {
         let cctx_status = self.get_cctx_status(cctx.id).await?;
         let root_id = cctx.root_id.unwrap_or(cctx.id);
-        let (need_to_import, need_to_update_ids) =
-            self.find_outdated_children_by_index(children_cctxs, cctx.id, root_id).await?;
+        let tx = self.db.begin().await?;
+        let (need_to_import, need_to_update_ids) = self
+            .find_outdated_children_by_index(children_cctxs, cctx.id, root_id, &tx)
+            .await?;
         tracing::info!(
             "need_to_import: {:?}, need_to_update_ids: {:?}",
             need_to_import,
             need_to_update_ids
         );
+        println!("need_to_import: {:?}", need_to_import);
+        println!("need_to_update_ids: {:?}", need_to_update_ids);
 
-        let tx = self.db.begin().await?;
+        
 
-        let mut cctx_to_be_updated = need_to_update_ids.clone();
 
         //First we update parent_id for the direct descendants
-        //The root_id for both direct and indirect descendants will be updated all at once
+        //The root_id for both direct and indirect descendants will be inside the loop
         CrossChainTxEntity::Entity::update_many()
-            .filter(CrossChainTxEntity::Column::Id.is_in(cctx_to_be_updated.iter().cloned()))
+            .filter(CrossChainTxEntity::Column::Id.is_in(need_to_update_ids.iter().cloned()))
             .set(CrossChainTxEntity::ActiveModel {
                 parent_id: ActiveValue::Set(Some(cctx.id)),
                 depth: ActiveValue::Set(cctx.depth + 1),
@@ -257,29 +261,33 @@ impl ZetachainCctxDatabase {
             .await?;
 
         let mut frontier = need_to_update_ids.clone();
+        let mut current_depth = cctx.depth + 1;
 
         loop {
             let mut new_frontier: Vec<i32> = vec![];
             for id in frontier.iter() {
-                let children = self.get_cctx_ids_by_parent_id(vec![*id]).await?;
+                let children = self.get_cctx_ids_by_parent_id(vec![*id], &tx).await?;
+                println!("children: {:?}", children);
                 new_frontier.extend(children.into_iter());
             }
             if new_frontier.is_empty() {
                 break;
             }
+            println!("new_frontier: {:?}", new_frontier);
             frontier = new_frontier;
-            cctx_to_be_updated.extend(frontier.clone().into_iter());
+            
+            //Now we update the root_id for all of the descendants
+            CrossChainTxEntity::Entity::update_many()
+                .filter(CrossChainTxEntity::Column::Id.is_in(frontier.iter().cloned()))
+                .set(CrossChainTxEntity::ActiveModel {
+                    root_id: ActiveValue::Set(Some(root_id)),
+                    depth: ActiveValue::Set(current_depth),
+                    ..Default::default()
+                })
+                .exec(&tx)
+                .await?;
+            current_depth += 1;
         }
-
-        //Now we update the root_id for all of the descendants
-        CrossChainTxEntity::Entity::update_many()
-            .filter(CrossChainTxEntity::Column::Id.is_in(cctx_to_be_updated.iter().cloned()))
-            .set(CrossChainTxEntity::ActiveModel {
-                root_id: ActiveValue::Set(Some(root_id)),
-                ..Default::default()
-            })
-            .exec(&tx)
-            .await?;
 
         // If the cctx is mined, there is no need to do any additional requests
         if cctx_status.status == CctxStatusStatus::OutboundMined {
@@ -291,7 +299,8 @@ impl ZetachainCctxDatabase {
             );
         // If cctx is not in the final state, we might get something new in the future, so we will check again later
         } else {
-            self.update_last_status_update_timestamp(cctx.id).await?;
+            self.update_last_status_update_timestamp(cctx.id, &tx)
+                .await?;
         }
         tx.commit().await?;
         Ok(())
@@ -902,7 +911,11 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    pub async fn update_last_status_update_timestamp(&self, cctx_id: i32) -> anyhow::Result<()> {
+    pub async fn update_last_status_update_timestamp(
+        &self,
+        cctx_id: i32,
+        tx: &DatabaseTransaction,
+    ) -> anyhow::Result<()> {
         CrossChainTxEntity::Entity::update(CrossChainTxEntity::ActiveModel {
             id: ActiveValue::Set(cctx_id),
             last_status_update_timestamp: ActiveValue::Set(chrono::Utc::now().naive_utc()),
@@ -910,7 +923,7 @@ impl ZetachainCctxDatabase {
             ..Default::default()
         })
         .filter(CrossChainTxEntity::Column::Id.eq(cctx_id))
-        .exec(self.db.as_ref())
+        .exec(tx)
         .await?;
         Ok(())
     }

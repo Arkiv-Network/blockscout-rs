@@ -28,7 +28,7 @@ pub struct CctxShort {
     pub retries_number: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CrossChainTx {
     pub creator: String,
     pub index: String,
@@ -41,7 +41,7 @@ pub struct CrossChainTx {
     pub revert_options: RevertOptions,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CctxStatus {
     pub status: String,
     pub status_message: String,
@@ -55,7 +55,7 @@ pub struct CctxStatus {
     pub error_message_abort: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InboundParams {
     pub sender: String,
     pub sender_chain_id: String,
@@ -73,7 +73,7 @@ pub struct InboundParams {
     pub confirmation_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OutboundParams {
     pub receiver: String,
     #[serde(rename = "receiver_chainId")]
@@ -102,7 +102,7 @@ pub struct CallOptions {
     pub is_arbitrary_call: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RevertOptions {
     pub revert_address: String,
     pub call_on_revert: bool,
