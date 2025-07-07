@@ -72,6 +72,7 @@ async fn level_data_gap(
     }
     let next_key = pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
     let res = database.level_data_gap(job_id, cctxs, &next_key, watermark).await?;
+    tracing::info!(" process_realtime_cctxs indexer level_data_gap result: {:?}", res);
     Ok(res)
 }
 
@@ -186,7 +187,7 @@ impl Indexer {
         })
     }
 
-    #[instrument(,level="debug",skip(self))]
+    #[instrument(,level="debug",skip(self,db))]
     async fn acquire_historical_watermark(&self,db: &DatabaseConnection, job_id: Uuid) -> anyhow::Result<watermark::Model> {
         
         let historical_watermark = watermark::Entity::find()
@@ -211,10 +212,11 @@ impl Indexer {
     
         tracing::debug!("setup completed, initializing streams");
         let status_update_batch_size = self.settings.status_update_batch_size;
+        let polling_interval = self.settings.polling_interval;
         let status_update_stream = Box::pin(async_stream::stream! {
             loop {
                 let batch_id = Uuid::new_v4();
-                match self.database.query_cctxs_for_status_update(status_update_batch_size, batch_id).await {
+                match self.database.query_cctxs_for_status_update(status_update_batch_size, batch_id, polling_interval).await {
                     std::result::Result::Ok(cctxs) => {
                         tracing::info!("found {:?} cctxs for status update", cctxs.iter().map(|c| c.index.clone()).collect::<Vec<String>>());
                         for cctx in cctxs {
@@ -227,7 +229,7 @@ impl Indexer {
                         tracing::error!(error = %e, batch_id = %batch_id, "Failed to query cctxs for status update");
                     }
                 }
-                tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
+                tokio::time::sleep(Duration::from_millis(polling_interval)).await;
             }
         }
         );
@@ -327,7 +329,7 @@ impl Indexer {
                                 if cctx.retries_number == retry_threshold as i32 {
                                     database.mark_cctx_as_failed(&cctx).await.unwrap();
                                 } else {
-                                database.unlock_cctx(cctx.id).await.unwrap();
+                                database.unlock_cctx(cctx.id, job_id).await.unwrap();
                                 }
                             }
                         }
@@ -335,7 +337,7 @@ impl Indexer {
                            
                             match level_data_gap(job_id, database.clone(), &client, watermark.clone(), level_data_gap_batch_size)  
                              .await {
-                             ResultOk((ProcessingStatus::Done,_)) =>  database.mark_watermark_as_done(watermark).await.unwrap(),
+                             ResultOk((ProcessingStatus::Done,_)) =>  database.mark_watermark_as_done(watermark,job_id).await.unwrap(),
                              ResultErr(e) => {
                                  tracing::warn!(error = %e, job_id = %job_id, "Failed to level data gap");
                                  if watermark.retries_number < retry_threshold as i32 {
