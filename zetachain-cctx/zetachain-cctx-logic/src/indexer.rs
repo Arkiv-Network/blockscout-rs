@@ -36,7 +36,7 @@ enum IndexerJob {
     HistoricalDataFetch(watermark::Model, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
 }
 
-#[instrument(,level="info",skip_all)]
+#[instrument(,level="debug",skip_all)]
 async fn refresh_cctx_status(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -54,6 +54,7 @@ async fn level_data_gap(
     client: &Client,
     watermark: watermark::Model,
     batch_size: u32,
+    realtime_threshold: i64,
 ) -> anyhow::Result<(ProcessingStatus,String)> {
     let PagedCCTXResponse { cross_chain_tx : cctxs, pagination } = client
     .list_cctxs(Some(&watermark.pointer), false, batch_size)
@@ -63,16 +64,10 @@ async fn level_data_gap(
         tracing::debug!("No recent cctxs found");
         return Ok((ProcessingStatus::Done,watermark.pointer));
     }
-    let earliest_cctx = cctxs.last().unwrap();
-    let last_synced_cctx = database.query_cctx(earliest_cctx.index.clone()).await?;
-
-    if last_synced_cctx.is_some() {
-        tracing::debug!("last synced cctx {} is present", earliest_cctx.index);
-        return Ok((ProcessingStatus::Done,watermark.pointer));
-    }
+    
     let next_key = pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
-    let res = database.level_data_gap(job_id, cctxs, &next_key, watermark).await?;
-    tracing::info!(" process_realtime_cctxs indexer level_data_gap result: {:?}", res);
+    let res = database.level_data_gap(job_id, cctxs, &next_key, realtime_threshold, watermark).await?;
+    tracing::debug!(" process_realtime_cctxs indexer level_data_gap result: {:?}", res);
     Ok(res)
 }
 
@@ -115,7 +110,7 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
     Ok(())
 }
 
-#[instrument(,level="info",skip(database, client,cctx), fields(job_id = %job_id, cctx_index = %cctx.index))]
+#[instrument(,level="debug",skip(database, client,cctx), fields(job_id = %job_id, cctx_index = %cctx.index))]
 async fn refresh_status_and_link_related(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -128,7 +123,7 @@ async fn refresh_status_and_link_related(
 }
 
 
-#[instrument(,level="info",skip_all)]
+#[instrument(,level="debug",skip_all)]
 async fn update_cctx_relations(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -140,7 +135,7 @@ async fn update_cctx_relations(
         .get_inbound_hash_to_cctx_data(&cctx.index)
         .await.map_err(|e| anyhow::format_err!("Failed to fetch children: {}", e))?;
     
-    tracing::info!("children_response: {:?}", children_response);
+    tracing::debug!("children_response: {:?}", children_response);
     database
     .traverse_and_update_tree_relationships(children_response.cross_chain_txs, cctx, job_id)
     .await
@@ -199,13 +194,16 @@ impl Indexer {
 
         self.database.lock_watermark(historical_watermark.clone(),job_id).await?;
 
-        tracing::info!("acquired historical watermark: {}", historical_watermark.id);
+        tracing::debug!("acquired historical watermark: {}", historical_watermark.id);
         Ok(historical_watermark)
     }
 
     #[instrument(,level="debug",skip(self))]
     pub async fn run(&self)-> anyhow::Result<()> {
-
+        if !self.settings.enabled {
+            tracing::debug!("indexer is disabled");
+            return Ok(());
+        }
         tracing::debug!("initializing indexer");
     
         self.database.setup_db().await?;
@@ -218,7 +216,7 @@ impl Indexer {
                 let batch_id = Uuid::new_v4();
                 match self.database.query_cctxs_for_status_update(status_update_batch_size, batch_id, polling_interval).await {
                     std::result::Result::Ok(cctxs) => {
-                        tracing::info!("found {:?} cctxs for status update", cctxs.iter().map(|c| c.index.clone()).collect::<Vec<String>>());
+                        tracing::debug!("found {:?} cctxs for status update", cctxs.iter().map(|c| c.index.clone()).collect::<Vec<String>>());
                         for cctx in cctxs {
                             let job_id = Uuid::new_v4();
                             tracing::debug!("job_id: {} cctx_index: {}", job_id, cctx.index);
@@ -321,6 +319,7 @@ impl Indexer {
                 let historical_batch_size = self.settings.historical_batch_size;
                 let level_data_gap_batch_size = self.settings.realtime_fetch_batch_size;
                 let retry_threshold = self.settings.retry_threshold;
+                let realtime_threshold = self.settings.realtime_threshold;
                 tokio::spawn(async move {
                     match job {
                         IndexerJob::StatusUpdate(cctx, job_id) => {
@@ -335,7 +334,7 @@ impl Indexer {
                         }
                         IndexerJob::LevelDataGap(watermark, job_id) => {
                            
-                            match level_data_gap(job_id, database.clone(), &client, watermark.clone(), level_data_gap_batch_size)  
+                            match level_data_gap(job_id, database.clone(), &client, watermark.clone(), level_data_gap_batch_size, realtime_threshold)  
                              .await {
                              ResultOk((ProcessingStatus::Done,_)) =>  database.mark_watermark_as_done(watermark,job_id).await.unwrap(),
                              ResultErr(e) => {
@@ -352,7 +351,7 @@ impl Indexer {
                         
                         IndexerJob::HistoricalDataFetch(watermark, job_id) => { 
                             if let Err(e) = historical_sync(database.clone(), &client, watermark.clone(), job_id, historical_batch_size).await {
-                                tracing::warn!(error = %e, job_id = %job_id, "Failed to sync historical data");
+                                tracing::warn!(error = %e, job_id = %job_id, watermark = %watermark.pointer, "Failed to sync historical data");
                                 database.unlock_watermark(watermark,job_id).await.unwrap();
                             }
                         }

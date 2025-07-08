@@ -14,13 +14,14 @@ pub struct Model {
     pub cross_chain_tx_id: i32,
     pub sender: String,
     pub sender_chain_id: String,
-    #[sea_orm(unique)]
     pub tx_origin: String,
     pub coin_type: CoinType,
     pub asset: Option<String>,
     pub amount: String,
+    #[sea_orm(unique)]
     pub observed_hash: String,
     pub observed_external_height: String,
+    #[sea_orm(unique)]
     pub ballot_index: String,
     pub finalized_zeta_height: String,
     pub tx_finalization_status: TxFinalizationStatus,

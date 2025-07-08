@@ -29,6 +29,35 @@ paths:
           type: string
       tags:
         - CctxInfoService
+  /api/v1/CctxInfoService:list:
+    get:
+      operationId: CctxInfoService_ListCctxs
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1ListCctxsResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          type: string
+          format: int64
+        - name: offset
+          in: query
+          required: false
+          type: string
+          format: int64
+        - name: status
+          in: query
+          required: false
+          type: string
+      tags:
+        - CctxInfoService
   /health:
     get:
       summary: |-

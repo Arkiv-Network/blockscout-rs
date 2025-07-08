@@ -27,7 +27,7 @@ impl CctxInfoService for CctxService {
     async fn list_cctxs(&self, request: Request<ListCctxsRequest>) -> Result<Response<ListCctxsResponse>, Status> {
         let request = request.into_inner();
 
-        let cctx_items = self.database.list_cctxs(request.limit, request.status).await.map_err(|e| Status::internal(e.to_string()))?;
+        let cctx_items = self.database.list_cctxs(request.limit, request.offset, request.status).await.map_err(|e| Status::internal(e.to_string()))?;
 
         let cctxs = cctx_items.into_iter().map(|cctx| { 
             CctxListItem {

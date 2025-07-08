@@ -1,13 +1,14 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::models::{self, CctxShort, CrossChainTx};
 use anyhow::Ok;
 use chrono::Utc;
+use sea_orm::ConnectionTrait;
 use sea_orm::{
     ActiveValue, DatabaseConnection, DatabaseTransaction, DbBackend, Statement, TransactionTrait,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
-use sea_orm::ConnectionTrait;
 use tracing::{instrument, Instrument};
 use uuid::Uuid;
 use zetachain_cctx_entity::sea_orm_active_enums::ProcessingStatus;
@@ -35,7 +36,6 @@ fn sanitize_string(input: String) -> String {
         .collect::<String>()
         .replace('\u{FFFD}', "?") // Replace replacement character with question mark
 }
-
 
 #[derive(Debug)]
 pub struct CompleteCctx {
@@ -117,7 +117,7 @@ impl ZetachainCctxDatabase {
         }
         let mut need_to_import = Vec::new();
         let mut need_to_update_ids = Vec::new();
-        
+
         for fetched_cctx in fetched_cctxs {
             let cctx = CrossChainTxEntity::Entity::find()
                 .filter(CrossChainTxEntity::Column::Index.eq(fetched_cctx.index.clone()))
@@ -136,7 +136,7 @@ impl ZetachainCctxDatabase {
         Ok((need_to_import, need_to_update_ids))
     }
 
-    #[instrument(level = "info", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn get_cctx_ids_by_parent_id(
         &self,
         parent_ids: Vec<i32>,
@@ -159,7 +159,7 @@ impl ZetachainCctxDatabase {
         job_id: Uuid,
         tx: &DatabaseTransaction,
     ) -> anyhow::Result<()> {
-        tracing::info!(
+        tracing::debug!(
             "job_id: {} updating multiple related cctxs: {:?} setting parent_id to {:?}",
             job_id,
             cctx_ids,
@@ -179,7 +179,7 @@ impl ZetachainCctxDatabase {
             .await?;
         Ok(())
     }
-    #[instrument(level = "info", skip_all,fields(child_index = %child_index, child_id = %child_id, root_id = %root_id, parent_id = %parent_id, depth = %depth))]
+    #[instrument(level = "debug", skip_all,fields(child_index = %child_index, child_id = %child_id, root_id = %root_id, parent_id = %parent_id, depth = %depth))]
     pub async fn update_single_related_cctx(
         &self,
         child_index: &str,
@@ -203,7 +203,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(level = "info", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn traverse_and_update_tree_relationships(
         &self,
         children_cctxs: Vec<CrossChainTx>,
@@ -216,23 +216,23 @@ impl ZetachainCctxDatabase {
         let (need_to_import, need_to_update_ids) = self
             .find_outdated_children_by_index(children_cctxs, cctx.id, root_id, &tx)
             .await?;
-        tracing::info!(
+        tracing::debug!(
             "need_to_import: {:?}, need_to_update_ids: {:?}",
             need_to_import,
             need_to_update_ids
         );
 
-        for new_cctx in need_to_import {
-            self.insert_transaction_with_tree_relationships(
-                new_cctx,
-                job_id,
-                root_id,
-                cctx.id,
-                cctx.depth + 1,
-                &tx,
-            )
-            .await?;
-        }
+        // for new_cctx in need_to_import {
+        //     self.insert_transaction_with_tree_relationships(
+        //         new_cctx,
+        //         job_id,
+        //         root_id,
+        //         cctx.id,
+        //         cctx.depth + 1,
+        //         &tx,
+        //     )
+        //     .await?;
+        // }
         //First we update parent_id for the direct descendants
         //The root_id for both direct and indirect descendants will be inside the loop
         CrossChainTxEntity::Entity::update_many()
@@ -285,7 +285,10 @@ impl ZetachainCctxDatabase {
             );
         // If cctx is not in the final state, we might get something new in the future, so we will check again later
         } else {
-            tracing::debug!("cctx {} is not mined, updating last status update timestamp", cctx.index);
+            tracing::debug!(
+                "cctx {} is not mined, updating last status update timestamp",
+                cctx.index
+            );
             self.update_last_status_update_timestamp(cctx.id, job_id, &tx)
                 .await?;
         }
@@ -400,16 +403,22 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="info",skip_all)]
+    #[instrument(,level="debug",skip_all)]
     pub async fn level_data_gap(
         self: &ZetachainCctxDatabase,
         job_id: Uuid,
         cctxs: Vec<CrossChainTx>,
         next_key: &str,
+        realtime_threshold: i64,
         watermark: watermark::Model,
     ) -> anyhow::Result<(ProcessingStatus, String)> {
         let earliest_fetched = cctxs.last().unwrap();
-        let latest_synced = self.query_cctx(earliest_fetched.index.clone()).await?;
+        let latest_fetched = cctxs.first().unwrap();
+        if earliest_fetched.cctx_status.last_update_timestamp.parse::<i64>().unwrap_or(0) < Utc::now().timestamp() - realtime_threshold {
+            tracing::info!("earliest_fetched.cctx_status.last_update_timestamp is too old, skipping");
+            return Ok((ProcessingStatus::Done, watermark.pointer.clone()));
+        }
+        let latest_synced = self.query_cctx(latest_fetched.index.clone()).await?;
         if latest_synced.is_some() {
             tracing::debug!(
                 "last synced cctx {} is present, marking as done",
@@ -486,7 +495,7 @@ impl ZetachainCctxDatabase {
         tx.commit().await?;
         Ok(())
     }
-    #[instrument(level = "info", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn import_cctxs(
         &self,
         job_id: Uuid,
@@ -551,10 +560,16 @@ impl ZetachainCctxDatabase {
                     .to_owned(),
             )
             .exec_with_returning_many(self.db.as_ref())
-            .instrument(tracing::debug_span!("inserting cctxs", job_id = %job_id))
+            .instrument(tracing::info_span!("inserting cctxs", job_id = %job_id))
             .await?;
 
-        tracing::info!("inserted cctxs: {:?}", inserted_cctxs.len());
+        tracing::info!("job_id: {}, inserted cctxs: {}", job_id, inserted_cctxs.len());
+        if inserted_cctxs.len() != cctxs.len() {
+            tracing::error!("inserted_cctxs.len() != cctxs.len(),\n
+            job_id: {}, cctxs.len(): {},\n
+            inserted_cctxs.len(): {}",
+            job_id, cctxs.len(), inserted_cctxs.len());
+        }
         // Create a map from index to id for quick lookup
         let index_to_id: std::collections::HashMap<String, i32> = inserted_cctxs
             .into_iter()
@@ -716,16 +731,51 @@ impl ZetachainCctxDatabase {
                 .instrument(tracing::debug_span!("inserting cctx_status"))
                 .await?;
         }
+
+        
+        if inbound_models.len() != index_to_id.len() {
+
+            let inbound_ballot_indices: HashSet<String> = inbound_models.iter().map(|inbound| inbound.ballot_index.as_ref().clone()).collect();
+
+            tracing::error!("inbound_models.len() != index_to_id.len(),\n
+            job_id: {}, index_to_id.len(): {},\n
+            inbound_models.len(): {}\n
+            index_to_id: {}",
+            job_id, index_to_id.len(), inbound_models.len(), index_to_id.iter().map(|(index,id)| format!("{}: {}", index, id)).collect::<Vec<String>>().join(","));
+
+            for (index,id) in index_to_id.iter() {
+                if !inbound_ballot_indices.contains(index) {
+                    tracing::error!("cctx_index: {} id {} not found in inbound_models_map", index, id);
+                    return Err(anyhow::anyhow!("cctx_index: {} not found in inbound_models_map", index));
+                }
+            }
+
+            
+        }
         if !inbound_models.is_empty() {
-            InboundParamsEntity::Entity::insert_many(inbound_models)
+            let inbound_result = InboundParamsEntity::Entity::insert_many(inbound_models)
                 .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(InboundParamsEntity::Column::TxOrigin)
+                    sea_orm::sea_query::OnConflict::column(InboundParamsEntity::Column::BallotIndex)
                         .do_nothing()
                         .to_owned(),
                 )
-                .exec(tx)
-                .instrument(tracing::info_span!("inserting inbound_params"))
+                .exec_with_returning_many(tx)
+                .instrument(tracing::debug_span!("inserting inbound_params"))
                 .await?;
+            let records_inserted = inbound_result.len();
+            let inbound_map: std::collections::HashMap<String, i32> = inbound_result
+            .into_iter()
+            .map(|cctx| (cctx.ballot_index, cctx.id))
+            .collect();
+
+            tracing::info!("job_id: {}, inserted inbound_params: {}", job_id, records_inserted);
+
+            for (cctx_index, _cctx_id) in index_to_id {
+                if !inbound_map.contains_key(&cctx_index) {
+                    tracing::error!("cctx_index: {} not found in inbound_map", cctx_index);
+                    return Err(anyhow::anyhow!("cctx_index: {} not found in inbound_map", cctx_index));
+                }
+            }
         }
         if !outbound_models.is_empty() {
             OutboundParamsEntity::Entity::insert_many(outbound_models)
@@ -741,14 +791,17 @@ impl ZetachainCctxDatabase {
         if !revert_models.is_empty() {
             RevertOptionsEntity::Entity::insert_many(revert_models)
                 .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(RevertOptionsEntity::Column::CrossChainTxId)
-                        .do_nothing()
-                        .to_owned(),
+                    sea_orm::sea_query::OnConflict::column(
+                        RevertOptionsEntity::Column::CrossChainTxId,
+                    )
+                    .do_nothing()
+                    .to_owned(),
                 )
                 .exec(tx)
                 .instrument(tracing::debug_span!("inserting revert_options"))
                 .await?;
         }
+
 
         Ok(())
     }
@@ -806,7 +859,7 @@ impl ZetachainCctxDatabase {
         })
         .filter(watermark::Column::Id.eq(watermark.id))
         .exec(self.db.as_ref())
-        .instrument(tracing::info_span!("marking watermark as done", watermark_id = %watermark.id,job_id = %job_id))
+        .instrument(tracing::debug_span!("marking watermark as done", watermark_id = %watermark.id,job_id = %job_id))
         .await?;
         Ok(())
     }
@@ -867,7 +920,7 @@ impl ZetachainCctxDatabase {
         cctxs.map_err(|e| anyhow::anyhow!(e))
     }
 
-    #[instrument(,level="info",skip(self), fields(batch_id = %batch_id))]
+    #[instrument(,level="debug",skip(self), fields(batch_id = %batch_id))]
     pub async fn query_cctxs_for_status_update(
         &self,
         batch_size: u32,
@@ -914,7 +967,7 @@ impl ZetachainCctxDatabase {
         cctxs.map_err(|e| anyhow::anyhow!(e))
     }
 
-    #[instrument(,level="info",skip(self,tx),fields(cctx_id = %cctx_id))]
+    #[instrument(,level="debug",skip(self,tx),fields(cctx_id = %cctx_id))]
     pub async fn mark_cctx_tree_processed(
         &self,
         cctx_id: i32,
@@ -935,7 +988,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="info",skip(self,tx),fields(cctx_id = %cctx_id, job_id = %job_id))]
+    #[instrument(,level="debug",skip(self,tx),fields(cctx_id = %cctx_id, job_id = %job_id))]
     pub async fn update_last_status_update_timestamp(
         &self,
         cctx_id: i32,
@@ -956,7 +1009,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="info",skip_all)]
+    #[instrument(,level="debug",skip_all)]
     pub async fn update_cctx_status(
         &self,
         cctx_id: i32,
@@ -1012,7 +1065,7 @@ impl ZetachainCctxDatabase {
                 })
                 .filter(cctx_status::Column::Id.eq(cctx_status_row.id))
                 .exec(self.db.as_ref())
-                .instrument(tracing::info_span!("updating cctx_status", new_status = %fetched_cctx.cctx_status.status))
+                .instrument(tracing::debug_span!("updating cctx_status", new_status = %fetched_cctx.cctx_status.status))
                 .await?;
         }
 
@@ -1031,7 +1084,7 @@ impl ZetachainCctxDatabase {
 
         Ok(())
     }
-    #[instrument(,level="info",skip(self, cctx, tx),fields(index = %cctx.index, job_id = %job_id, root_id = %root_id, parent_id = %parent_id, depth = %depth))]
+    #[instrument(,level="debug",skip(self, cctx, tx),fields(index = %cctx.index, job_id = %job_id, root_id = %root_id, parent_id = %parent_id, depth = %depth))]
     pub async fn insert_transaction_with_tree_relationships(
         &self,
         cctx: CrossChainTx,
@@ -1069,7 +1122,7 @@ impl ZetachainCctxDatabase {
                     .to_owned(),
             )
             .exec(tx)
-            .instrument(tracing::info_span!("inserting cctx", index = %index, origin_tx =  %cctx.inbound_params.tx_origin, job_id = %job_id))
+            .instrument(tracing::debug_span!("inserting cctx", index = %index, origin_tx =  %cctx.inbound_params.tx_origin, job_id = %job_id))
             .await?;
 
         // Get the inserted tx id
@@ -1148,7 +1201,7 @@ impl ZetachainCctxDatabase {
                     .map_err(|e| anyhow::anyhow!(e))?,
             ),
         };
-        InboundParamsEntity::Entity::insert(inbound_model)
+        let inbound_result = InboundParamsEntity::Entity::insert(inbound_model)
             .on_conflict(
                 sea_orm::sea_query::OnConflict::column(InboundParamsEntity::Column::TxOrigin)
                     .do_nothing()
@@ -1159,6 +1212,8 @@ impl ZetachainCctxDatabase {
                 tracing::debug_span!("inserting inbound_params", index = %index, job_id = %job_id),
             )
             .await?;
+        let inbound_id = inbound_result.last_insert_id;
+        tracing::debug!("inbound_id: {}", inbound_id);
 
         // Insert outbound_params
         for outbound in cctx.outbound_params {
@@ -1276,11 +1331,13 @@ impl ZetachainCctxDatabase {
     pub async fn list_cctxs(
         &self,
         limit: i64,
+        offset: i64,
         status_filter: Option<String>,
     ) -> anyhow::Result<Vec<CctxListItem>> {
         // First, get CCTX records with their status
         let mut query = CrossChainTxEntity::Entity::find()
             .inner_join(cctx_status::Entity)
+            .offset(offset as u64)
             .limit(limit as u64);
 
         // Apply status filter if provided

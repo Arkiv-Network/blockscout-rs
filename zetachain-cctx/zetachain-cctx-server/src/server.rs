@@ -1,6 +1,7 @@
 use crate::{
     proto::{
         health_actix::route_health, health_server::HealthServer,
+        cctx_info_service_server::CctxInfoServiceServer,
     },
     services::{
         cctx::CctxService, HealthService
@@ -29,6 +30,7 @@ impl Router {
     pub fn grpc_router(&self) -> tonic::transport::server::Router {
         tonic::transport::Server::builder()
             .add_service(HealthServer::from_arc(self.health.clone()))
+            .add_service(CctxInfoServiceServer::from_arc(self.cctx.clone()))
     }
 }
 

@@ -14,9 +14,7 @@ use wiremock::{
     matchers::{method, path, query_param},
     Mock, MockServer, ResponseTemplate,
 };
-use zetachain_cctx_entity::cctx_status::{
-    self, Column as CctxStatusColumn, Entity as CctxStatusEntity,
-};
+use zetachain_cctx_entity::cctx_status::{Column as CctxStatusColumn, Entity as CctxStatusEntity};
 use zetachain_cctx_entity::{inbound_params, outbound_params, revert_options};
 use zetachain_cctx_entity::sea_orm_active_enums::CctxStatusStatus::OutboundMined;
 use zetachain_cctx_entity::sea_orm_active_enums::{
@@ -25,7 +23,7 @@ use zetachain_cctx_entity::sea_orm_active_enums::{
 use zetachain_cctx_entity::{cross_chain_tx, sea_orm_active_enums::Kind, watermark};
 
 use crate::helpers::{
-    dummy_cctx_response, dummy_cctx_with_pagination_response, dummy_cross_chain_tx,
+    dummy_cctx_response, dummy_cctx_with_pagination_response,
     dummy_related_cctxs_response, empty_response,
 };
 use zetachain_cctx_logic::{
@@ -241,8 +239,8 @@ async fn test_historical_sync_updates_pointer() {
             .await
             .unwrap();
         assert!(outbound.is_some());
-        let status = cctx_status::Entity::find()
-            .filter(cctx_status::Column::CrossChainTxId.eq(cctx_id))
+        let status = CctxStatusEntity::find()
+            .filter(CctxStatusColumn::CrossChainTxId.eq(cctx_id))
             .one(db_conn.as_ref())
             .await
             .unwrap();
@@ -374,7 +372,7 @@ async fn test_status_update() {
         .unwrap()
         .unwrap()
         .id;
-    let cctx_status = cctx_status::Entity::find()
+    let cctx_status = CctxStatusEntity::find()
         .filter(CctxStatusColumn::CrossChainTxId.eq(cctx_id))
         .one(db.client().as_ref())
         .await

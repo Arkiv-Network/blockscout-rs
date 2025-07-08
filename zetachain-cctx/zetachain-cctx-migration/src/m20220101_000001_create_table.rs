@@ -268,13 +268,14 @@ impl MigrationTrait for Migration {
                             .string()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(InboundParams::TxOrigin).string().unique_key().not_null())
+                    .col(ColumnDef::new(InboundParams::TxOrigin).string().not_null())
                     .col(ColumnDef::new(InboundParams::CoinType).enumeration("coin_type", ["Zeta", "Gas", "ERC20", "Cmd", "NoAssetCall"]).not_null())
                     .col(ColumnDef::new(InboundParams::Asset).string().null())
                     .col(ColumnDef::new(InboundParams::Amount).string().not_null())
                     .col(
                         ColumnDef::new(InboundParams::ObservedHash)
                             .string()
+                            .unique_key()
                             .not_null(),
                     )
                     .col(
@@ -285,6 +286,7 @@ impl MigrationTrait for Migration {
                     .col(
                         ColumnDef::new(InboundParams::BallotIndex)
                             .string()
+                            .unique_key()
                             .not_null(),
                     )
                     .col(

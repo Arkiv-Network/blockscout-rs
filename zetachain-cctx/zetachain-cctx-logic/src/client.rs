@@ -78,7 +78,7 @@ impl Client {
         ))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level="debug",skip_all)]
     pub async fn fetch_cctx(&self, index: &str) -> anyhow::Result<CrossChainTx> {
         let mut url: Url = self.settings.url.parse().unwrap();
         url.set_path(&format!("{}crosschain/cctx/{}", url.path(), index));
@@ -126,7 +126,7 @@ impl Client {
         Ok(body)
     }
 
-    #[instrument(level="info",skip_all)]
+    #[instrument(level="debug",skip_all)]
     pub async fn get_inbound_hash_to_cctx_data(
         &self,
         cctx_index: &str,
