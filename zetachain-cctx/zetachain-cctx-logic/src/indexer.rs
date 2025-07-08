@@ -76,7 +76,7 @@ async fn level_data_gap(
     Ok(res)
 }
 
-#[instrument(,level="debug",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
+#[instrument(,level="info",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
 async fn historical_sync(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,

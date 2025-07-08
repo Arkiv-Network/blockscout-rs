@@ -719,7 +719,7 @@ impl ZetachainCctxDatabase {
         if !inbound_models.is_empty() {
             InboundParamsEntity::Entity::insert_many(inbound_models)
                 .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(InboundParamsEntity::Column::CrossChainTxId)
+                    sea_orm::sea_query::OnConflict::column(InboundParamsEntity::Column::TxOrigin)
                         .do_nothing()
                         .to_owned(),
                 )
@@ -730,7 +730,7 @@ impl ZetachainCctxDatabase {
         if !outbound_models.is_empty() {
             OutboundParamsEntity::Entity::insert_many(outbound_models)
                 .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(OutboundParamsEntity::Column::CrossChainTxId)
+                    sea_orm::sea_query::OnConflict::column(OutboundParamsEntity::Column::Hash)
                         .do_nothing()
                         .to_owned(),
                 )
@@ -1149,6 +1149,11 @@ impl ZetachainCctxDatabase {
             ),
         };
         InboundParamsEntity::Entity::insert(inbound_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(InboundParamsEntity::Column::TxOrigin)
+                    .do_nothing()
+                    .to_owned(),
+            )
             .exec(tx)
             .instrument(
                 tracing::debug_span!("inserting inbound_params", index = %index, job_id = %job_id),

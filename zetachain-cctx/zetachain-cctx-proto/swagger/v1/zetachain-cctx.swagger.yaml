@@ -88,6 +88,19 @@ definitions:
         format: uint64
       is_arbitrary_call:
         type: boolean
+  v1CctxListItem:
+    type: object
+    properties:
+      index:
+        type: string
+      status:
+        $ref: '#/definitions/v1CctxStatus'
+      amount:
+        type: string
+      source_chain_id:
+        type: string
+      target_chain_id:
+        type: string
   v1CctxStatus:
     type: string
     enum:
@@ -222,7 +235,7 @@ definitions:
         type: array
         items:
           type: object
-          $ref: '#/definitions/v1CrossChainTx'
+          $ref: '#/definitions/v1CctxListItem'
   v1OutboundParams:
     type: object
     properties:
