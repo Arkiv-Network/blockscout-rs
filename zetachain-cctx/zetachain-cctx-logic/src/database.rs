@@ -1334,55 +1334,55 @@ impl ZetachainCctxDatabase {
         offset: i64,
         status_filter: Option<String>,
     ) -> anyhow::Result<Vec<CctxListItem>> {
-        // First, get CCTX records with their status
-        let mut query = CrossChainTxEntity::Entity::find()
-            .inner_join(cctx_status::Entity)
-            .offset(offset as u64)
-            .limit(limit as u64);
+        let mut sql = String::from(r#"
+        SELECT 
+        cctx.index,
+        cs.status,
+        op.amount,
+        ip.sender_chain_id,
+        op.receiver_chain_id
+        FROM cross_chain_tx cctx
+        INNER JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
+        INNER JOIN inbound_params ip ON cctx.id = ip.cross_chain_tx_id
+        INNER JOIN outbound_params op ON cctx.id = op.cross_chain_tx_id
+        "#);
 
-        // Apply status filter if provided
-        if let Some(status_str) = status_filter {
-            let status_enum = CctxStatusStatus::try_from(status_str.clone())
-                .map_err(|_| anyhow::anyhow!("Invalid status: {}", status_str))?;
-            query = query.filter(cctx_status::Column::Status.eq(status_enum));
+        let mut params: Vec<sea_orm::Value> = Vec::new();
+        let mut param_count = 0;
+
+        // Add status filter if provided
+        if let Some(status) = status_filter {
+            param_count += 1;
+            sql.push_str(&format!(" WHERE cs.status = ${}", param_count));
+            params.push(sea_orm::Value::String(Some(Box::new(status))));
         }
 
-        // Get the CCTX records
-        let cctxs = query.all(self.db.as_ref()).await?;
+        // Add ordering and pagination
+        param_count += 1;
+        sql.push_str(&format!(" ORDER BY cs.created_timestamp DESC LIMIT ${}", param_count));
+        params.push(sea_orm::Value::BigInt(Some(limit)));
+        
+        param_count += 1;
+        sql.push_str(&format!(" OFFSET ${}", param_count));
+        params.push(sea_orm::Value::BigInt(Some(offset)));
 
-        // For each CCTX, get the status, inbound and outbound params
+        let statement = Statement::from_sql_and_values(DbBackend::Postgres, sql, params);
+
+        let rows = self.db.query_all(statement).await?;
+
         let mut items = Vec::new();
-        for cctx in cctxs {
-            // Get status
-            let status = cctx_status::Entity::find()
-                .filter(cctx_status::Column::CrossChainTxId.eq(cctx.id))
-                .one(self.db.as_ref())
-                .await?;
-
-            // Get inbound params
-            let inbound = InboundParamsEntity::Entity::find()
-                .filter(InboundParamsEntity::Column::CrossChainTxId.eq(cctx.id))
-                .one(self.db.as_ref())
-                .await?;
-
-            // Get outbound params
-            let outbounds = OutboundParamsEntity::Entity::find()
-                .filter(OutboundParamsEntity::Column::CrossChainTxId.eq(cctx.id))
-                .all(self.db.as_ref())
-                .await?;
-
-            if let (Some(status), Some(inbound)) = (status, inbound) {
-                // Use the first outbound for amount and target chain ID
-                if let Some(outbound) = outbounds.first() {
-                    items.push(CctxListItem {
-                        index: cctx.index,
-                        status: status.status,
-                        amount: outbound.amount.clone(),
-                        source_chain_id: inbound.sender_chain_id.clone(),
-                        target_chain_id: outbound.receiver_chain_id.clone(),
-                    });
-                }
-            }
+        for row in rows {
+            let status_str: String = row.try_get_by_index(1)?;
+            let status = CctxStatusStatus::try_from(status_str)
+                .map_err(|_| sea_orm::DbErr::Custom("Invalid status".to_string()))?;
+            
+            items.push(CctxListItem {
+                index: row.try_get_by_index(0)?,
+                status,
+                amount: row.try_get_by_index(2)?,
+                source_chain_id: row.try_get_by_index(3)?,
+                target_chain_id: row.try_get_by_index(4)?,
+            });
         }
 
         Ok(items)
