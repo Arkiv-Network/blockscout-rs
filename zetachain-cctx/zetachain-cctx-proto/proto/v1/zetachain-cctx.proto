@@ -22,7 +22,7 @@ message ListCctxsRequest {
 }
 
 message ListCctxsResponse {
-  repeated CrossChainTx cctxs = 1;
+  repeated CctxListItem cctxs = 1;
 }
 
 
@@ -176,6 +176,13 @@ message RevertOptions {
   string revert_gas_limit = 5 ;
 }
 
+message CctxListItem {
+  string index = 1;
+  CctxStatus status = 2;
+  string amount = 3;
+  string source_chain_id = 4;
+  string target_chain_id = 5;
+}
 message CrossChainTx {
   string creator = 1;
   string index = 2;

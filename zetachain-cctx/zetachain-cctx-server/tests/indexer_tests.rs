@@ -117,7 +117,7 @@ async fn test_historical_sync_updates_pointer() {
         .await;
 
     Mock::given(method("GET"))
-        .and(path_regex(r"/crosschain/cctx/\d+"))
+        .and(path_regex(r"/crosschain/cctx/.+"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(dummy_cctx_response("dummy_index", "OutboundMined")),
@@ -126,7 +126,7 @@ async fn test_historical_sync_updates_pointer() {
         .await;
 
     Mock::given(method("GET"))
-        .and(path_regex(r"/inboundHashToCctxData/\d+"))
+        .and(path_regex(r"/inboundHashToCctxData/.+"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!(
             {"CrossChainTxs": []}
         )))
