@@ -66,8 +66,8 @@ async fn level_data_gap(
     }
     
     let next_key = pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
-    let res = database.level_data_gap(job_id, cctxs, &next_key, realtime_threshold, watermark).await?;
-    tracing::debug!(" process_realtime_cctxs indexer level_data_gap result: {:?}", res);
+    let res = database.import_missing_cctxs(job_id, cctxs, &next_key, realtime_threshold, watermark).await?;
+    tracing::debug!(" process_realtime_cctxs indexer import_missing_cctxs result: {:?}", res);
     Ok(res)
 }
 
@@ -216,10 +216,9 @@ impl Indexer {
                 let batch_id = Uuid::new_v4();
                 match self.database.query_cctxs_for_status_update(status_update_batch_size, batch_id, polling_interval).await {
                     std::result::Result::Ok(cctxs) => {
-                        tracing::debug!("found {:?} cctxs for status update", cctxs.iter().map(|c| c.index.clone()).collect::<Vec<String>>());
+                        tracing::debug!("batch_id: {} query_cctxs_for_status_update returned {:?} cctxs for status update", batch_id, cctxs.iter().map(|c| c.index.clone()).collect::<Vec<String>>());
                         for cctx in cctxs {
                             let job_id = Uuid::new_v4();
-                            tracing::debug!("job_id: {} cctx_index: {}", job_id, cctx.index);
                             yield IndexerJob::StatusUpdate(cctx, job_id);
                         }
                     }

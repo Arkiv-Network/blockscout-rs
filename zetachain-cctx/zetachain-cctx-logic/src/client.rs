@@ -44,7 +44,7 @@ pub struct Client {
 }
 
 impl Client {
-    #[instrument(level="debug",skip(self, request))]
+    #[instrument(level="debug",skip(self, request), fields(url = %request.url()))]
     async fn make_request(&self, request: Request) -> anyhow::Result<Response> {
         for attempt in 1..=self.settings.num_of_retries {
             let permit = timeout(
@@ -97,7 +97,6 @@ impl Client {
     ) -> Result<PagedCCTXResponse, Error> {
         let mut url: Url = self.settings.url.parse().unwrap();
         let path = url.path();
-        //add "/cctx" to the path
         url.set_path(&format!("{}crosschain/cctx", path));
         url.query_pairs_mut()
             .append_pair("pagination.limit", &batch_size.to_string())
@@ -115,10 +114,6 @@ impl Client {
             .await?
             .error_for_status()
             .map_err(|e| anyhow::anyhow!("HTTP request error: {}", e))?;
-        // let body = response
-        //     .json::<PagedCCTXResponse>()
-        //     .await
-        //     .map_err(|e| anyhow::anyhow!("JSON parsing error: {}", e))?;
 
         let text = response.text().await?;
         let body = serde_json::from_str::<PagedCCTXResponse>(&text)

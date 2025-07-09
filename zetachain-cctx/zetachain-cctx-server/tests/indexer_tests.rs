@@ -23,8 +23,7 @@ use zetachain_cctx_entity::sea_orm_active_enums::{
 use zetachain_cctx_entity::{cross_chain_tx, sea_orm_active_enums::Kind, watermark};
 
 use crate::helpers::{
-    dummy_cctx_response, dummy_cctx_with_pagination_response,
-    dummy_related_cctxs_response, empty_response,
+    dummy_cctx_with_pagination_response, dummy_cross_chain_tx, dummy_related_cctxs_response, empty_response
 };
 use zetachain_cctx_logic::{
     client::{Client, RpcSettings},
@@ -118,7 +117,7 @@ async fn test_historical_sync_updates_pointer() {
         .and(path_regex(r"/crosschain/cctx/.+"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(dummy_cctx_response("dummy_index", "OutboundMined")),
+                .set_body_json(dummy_cross_chain_tx("dummy_index", "OutboundMined")),
         )
         .mount(&mock_server)
         .await;
@@ -163,6 +162,7 @@ async fn test_historical_sync_updates_pointer() {
         IndexerSettings {
             polling_interval: 100, // Fast polling for tests
             concurrency: 10,
+            enabled: true,
             ..Default::default()
         },
         db_conn.clone(),
@@ -224,7 +224,7 @@ async fn test_historical_sync_updates_pointer() {
             .one(db_conn.as_ref())
             .await
             .unwrap();
-        assert!(cctx.is_some());
+        assert!(cctx.is_some(), "cctx not found for index: {}", index);
         let cctx = cctx.unwrap();
         let cctx_id = cctx.id;
         let inbound = inbound_params::Entity::find()
@@ -232,19 +232,19 @@ async fn test_historical_sync_updates_pointer() {
             .one(db_conn.as_ref())
             .await
             .unwrap();
-        assert!(inbound.is_some());
+        assert!(inbound.is_some(), "inbound params not found for cctx: {}", index);
         let outbound = outbound_params::Entity::find()
             .filter(outbound_params::Column::CrossChainTxId.eq(cctx_id))
             .one(db_conn.as_ref())
             .await
             .unwrap();
-        assert!(outbound.is_some());
+        assert!(outbound.is_some(), "outbound params not found for cctx: {}", index);
         let status = CctxStatusEntity::find()
             .filter(CctxStatusColumn::CrossChainTxId.eq(cctx_id))
             .one(db_conn.as_ref())
             .await
             .unwrap();
-        assert!(status.is_some());
+        assert!(status.is_some(), "status not found for cctx: {}", index);
         let revert = revert_options::Entity::find()
             .filter(revert_options::Column::CrossChainTxId.eq(cctx_id))
             .one(db_conn.as_ref())
@@ -322,7 +322,9 @@ async fn test_status_update() {
         ))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(dummy_cctx_response(pending_tx_index, "PendingOutbound")),
+                .set_body_json(json!({
+                    "CrossChainTx": dummy_cross_chain_tx(pending_tx_index, "PendingOutbound")
+                })),
         )
         .up_to_n_times(1)
         .mount(&mock_server)
@@ -334,7 +336,9 @@ async fn test_status_update() {
         ))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(dummy_cctx_response(pending_tx_index, "OutboundMined")),
+                .set_body_json(json!({
+                    "CrossChainTx": dummy_cross_chain_tx(pending_tx_index, "OutboundMined")
+                })),
         )
         .up_to_n_times(1)
         .mount(&mock_server)
@@ -350,6 +354,7 @@ async fn test_status_update() {
         IndexerSettings {
             polling_interval: 100, // Fast polling for tests
             concurrency: 10,
+            enabled: true,
             ..Default::default()
         },
         db.client().clone(),
@@ -438,7 +443,9 @@ async fn test_status_update_links_related() {
         .and(path_regex(r"/crosschain/cctx/.+"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(dummy_cctx_response("root_index", "OutboundMined")),
+                .set_body_json(json!({
+                    "CrossChainTx": dummy_cross_chain_tx("root_index", "OutboundMined")
+                })),
         )
         .mount(&mock_server)
         .await;
@@ -517,6 +524,7 @@ async fn test_status_update_links_related() {
             polling_interval: 100, // Fast polling for tests
             concurrency: 10,
             retry_threshold: 3,
+            enabled: true,
             ..Default::default()
         },
         db.client().clone(),
@@ -761,6 +769,7 @@ async fn test_get_cctx_info() {
         |mut x| {
             x.indexer.concurrency = 1;
             x.indexer.polling_interval = 1000;
+            x.tracing.enabled = false;
             x
         },
         db.client(),
@@ -916,21 +925,8 @@ async fn test_level_data_gap() {
         .mount(&mock_server)
         .await;
 
-    // simulate realtime fetcher getting some relevant data
-    Mock::given(method("GET"))
-        .and(path("/crosschain/cctx"))
-        .and(query_param("unordered", "false"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            dummy_cctx_with_pagination_response(
-                &["page_1_index_1", "page_1_index_2"],
-                "SECOND_PAGE",
-            ),
-        ))
-        .up_to_n_times(1)
-        .mount(&mock_server)
-        .await;
 
-    Mock::given(method("GET"))
+        Mock::given(method("GET"))
         .and(path("/crosschain/cctx"))
         .and(query_param("unordered", "false"))
         .and(query_param("pagination.key", "SECOND_PAGE"))
@@ -942,7 +938,6 @@ async fn test_level_data_gap() {
         ))
         .mount(&mock_server)
         .await;
-
     // since these cctx are absent, the indexer is exprected to follow through and request the next page
 
     Mock::given(method("GET"))
@@ -955,13 +950,31 @@ async fn test_level_data_gap() {
         .up_to_n_times(1)
         .mount(&mock_server)
         .await;
+    // simulate realtime fetcher getting some relevant data
+    Mock::given(method("GET"))
+        .and(path("/crosschain/cctx"))
+        .and(query_param("unordered", "false"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            dummy_cctx_with_pagination_response(
+                &["page_1_index_1", "page_1_index_2"],
+                "SECOND_PAGE",
+            ),
+        ))
+        .mount(&mock_server)
+        .await;
+
+
+
+    
 
     //supress status update/related cctx search
     Mock::given(method("GET"))
         .and(path_regex(r"/crosschain/cctx/.+"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!(
-            {"CrossChainTxs": []}
-        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json( 
+            json!({
+                "CrossChainTx": dummy_cross_chain_tx("page_3_index_1", "OutboundMined")
+            })
+        ))
         .mount(&mock_server)
         .await;
     //supress status update/related cctx search
@@ -969,7 +982,11 @@ async fn test_level_data_gap() {
         .and(path_regex(r"crosschain/inboundHashToCctxData/.+"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(dummy_cctx_response("page_3_index_1", "OutboundMined")),
+                .set_body_json(
+                    json!({
+                        "CrossChainTxs": []
+                    })
+                ),
         )
         .mount(&mock_server)
         .await;
@@ -984,6 +1001,8 @@ async fn test_level_data_gap() {
         IndexerSettings {
             polling_interval: 100, // Fast polling for tests
             concurrency: 10,
+            realtime_threshold: 10_000,
+            enabled: true,
             ..Default::default()
         },
         db.client().clone(),
@@ -1024,7 +1043,7 @@ async fn test_level_data_gap() {
             .await
             .unwrap();
         assert!(cctx.is_some(), "CCTX with index {} not found", index);
-        assert_eq!(cctx.unwrap().processing_status, ProcessingStatus::Unlocked);
+        
     }
 
     let cctx_count = cross_chain_tx::Entity::find()

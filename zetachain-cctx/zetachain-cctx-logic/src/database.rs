@@ -222,17 +222,17 @@ impl ZetachainCctxDatabase {
             need_to_update_ids
         );
 
-        // for new_cctx in need_to_import {
-        //     self.insert_transaction_with_tree_relationships(
-        //         new_cctx,
-        //         job_id,
-        //         root_id,
-        //         cctx.id,
-        //         cctx.depth + 1,
-        //         &tx,
-        //     )
-        //     .await?;
-        // }
+        for new_cctx in need_to_import {
+            self.insert_transaction_with_tree_relationships(
+                new_cctx,
+                job_id,
+                root_id,
+                cctx.id,
+                cctx.depth + 1,
+                &tx,
+            )
+            .await?;
+        }
         //First we update parent_id for the direct descendants
         //The root_id for both direct and indirect descendants will be inside the loop
         CrossChainTxEntity::Entity::update_many()
@@ -403,8 +403,8 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="debug",skip_all)]
-    pub async fn level_data_gap(
+    #[instrument(,level="debug",skip_all, fields(cctx_indexes = %cctxs.iter().map(|cctx| cctx.index.clone()).collect::<Vec<String>>().join(",")))]
+    pub async fn import_missing_cctxs(
         self: &ZetachainCctxDatabase,
         job_id: Uuid,
         cctxs: Vec<CrossChainTx>,
@@ -415,7 +415,7 @@ impl ZetachainCctxDatabase {
         let earliest_fetched = cctxs.last().unwrap();
         let latest_fetched = cctxs.first().unwrap();
         if earliest_fetched.cctx_status.last_update_timestamp.parse::<i64>().unwrap_or(0) < Utc::now().timestamp() - realtime_threshold {
-            tracing::info!("earliest_fetched.cctx_status.last_update_timestamp is too old, skipping");
+            tracing::info!("earliest fetched cctx is too old, skipping and marking watermark as done");
             return Ok((ProcessingStatus::Done, watermark.pointer.clone()));
         }
         let latest_synced = self.query_cctx(latest_fetched.index.clone()).await?;
@@ -859,7 +859,6 @@ impl ZetachainCctxDatabase {
         })
         .filter(watermark::Column::Id.eq(watermark.id))
         .exec(self.db.as_ref())
-        .instrument(tracing::debug_span!("marking watermark as done", watermark_id = %watermark.id,job_id = %job_id))
         .await?;
         Ok(())
     }
@@ -1162,7 +1161,12 @@ impl ZetachainCctxDatabase {
             ))),
         };
         cctx_status::Entity::insert(status_model)
-            .exec(tx)
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::column(cctx_status::Column::CrossChainTxId)
+                .do_nothing()
+                .to_owned(),
+        )
+            .exec(tx)   
             .instrument(
                 tracing::debug_span!("inserting cctx_status", index = %index, job_id = %job_id),
             )
@@ -1203,7 +1207,7 @@ impl ZetachainCctxDatabase {
         };
         let inbound_result = InboundParamsEntity::Entity::insert(inbound_model)
             .on_conflict(
-                sea_orm::sea_query::OnConflict::column(InboundParamsEntity::Column::TxOrigin)
+                sea_orm::sea_query::OnConflict::column(InboundParamsEntity::Column::ObservedHash)
                     .do_nothing()
                     .to_owned(),
             )
@@ -1253,7 +1257,13 @@ impl ZetachainCctxDatabase {
                 ),
             };
             OutboundParamsEntity::Entity::insert(outbound_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(OutboundParamsEntity::Column::Hash)
+                    .do_nothing()
+                    .to_owned(),
+            )
             .exec(tx)
+            
             .instrument(tracing::debug_span!("inserting outbound_params", index = %index, job_id = %job_id))
             .await?;
         }
@@ -1299,7 +1309,7 @@ impl ZetachainCctxDatabase {
             -- CctxStatus fields
             cs.id as status_id,
             cs.cross_chain_tx_id as status_cross_chain_tx_id,
-            cs.status,
+            cs.status::text,
             cs.status_message::text,
             cs.error_message,
             cs.last_update_timestamp,
@@ -1353,9 +1363,9 @@ impl ZetachainCctxDatabase {
         let row = &rows[0];
         
         // Check if required entities exist
-        let status_id: Option<i32> = row.try_get_by_index(14)?;
-        let inbound_id: Option<i32> = row.try_get_by_index(26)?;
-        let revert_id: Option<i32> = row.try_get_by_index(42)?;
+        let status_id: Option<i32> = row.try_get_by_index(13)?;
+        let inbound_id: Option<i32> = row.try_get_by_index(23)?;
+        let revert_id: Option<i32> = row.try_get_by_index(39)?;
 
         if status_id.is_none() {
             return Err(anyhow::anyhow!("CCTX status not found for index: {}", index));
@@ -1443,7 +1453,7 @@ impl ZetachainCctxDatabase {
             cross_chain_tx_id,
             receiver,
             receiver_chain_id,
-            coin_type,
+            coin_type::text,
             amount,
             tss_nonce,
             gas_limit,
@@ -1456,10 +1466,10 @@ impl ZetachainCctxDatabase {
             effective_gas_price,
             effective_gas_limit,
             tss_pubkey,
-            tx_finalization_status,
+            tx_finalization_status::text,
             call_options_gas_limit,
             call_options_is_arbitrary_call,
-            confirmation_mode
+            confirmation_mode::text
         FROM outbound_params
         WHERE cross_chain_tx_id = $1
         "#;

@@ -18,6 +18,7 @@ async fn test_list_cctxs_endpoint() {
         db_url,
         |mut x| {
             x.indexer.enabled = false;
+            x.tracing.enabled = false;
             x
         },
         db.client(),
@@ -65,7 +66,11 @@ async fn test_list_cctxs_with_status_filter() {
 
     let client = Client::new(RpcSettings::default());
     let base =
-        crate::helpers::init_zetachain_cctx_server(db_url, |x| x, db.client(), Arc::new(client))
+        crate::helpers::init_zetachain_cctx_server(db_url, |mut x| {
+            x.tracing.enabled = false;
+            x.indexer.enabled = false;
+            x
+        }, db.client(), Arc::new(client))
             .await;
 
     let dummy_cctxs: Vec<CrossChainTx> = vec!["1", "2"]
@@ -141,6 +146,7 @@ async fn test_list_cctxs_with_status_filter() {
     let cctxs = cctxs.unwrap().as_array().unwrap();
 
     assert_eq!(cctxs.len(), 2);
+
 
     
 }

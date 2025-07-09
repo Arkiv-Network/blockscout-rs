@@ -19,17 +19,19 @@ async fn init_db(test_name: &str) -> TestDbGuard {
     TestDbGuard::new::<migration::Migrator>(&db_name).await
 }
 
-fn dummy_cross_chain_tx(index: &str) -> CrossChainTx {
+
+#[allow(dead_code)]
+pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
     CrossChainTx {
         creator: "creator".to_string(),
         index: index.to_string(),
         zeta_fees: "0".to_string(),
         relayed_message: "msg".to_string(),
         cctx_status: CctxStatus {
-            status: "PendingOutbound".to_string(),
+            status: status.to_string(),
             status_message: "".to_string(),
             error_message: "".to_string(),
-            last_update_timestamp: "0".to_string(),
+            last_update_timestamp: (Utc::now().timestamp() - 1000).to_string(),
             is_abort_refunded: false,
             created_timestamp: "0".to_string(),
             error_message_revert: "".to_string(),
@@ -53,15 +55,15 @@ fn dummy_cross_chain_tx(index: &str) -> CrossChainTx {
         },
         outbound_params: vec![OutboundParams {
             receiver: "receiver".to_string(),
-            receiver_chain_id: "1".to_string(),
+            receiver_chain_id: "2".to_string(),
             coin_type: "Zeta".to_string(),
-            amount: "0".to_string(),
+            amount: "1000000000000000000".to_string(),
             tss_nonce: "0".to_string(),
             gas_limit: "0".to_string(),
             gas_price: "0".to_string(),
             gas_priority_fee: "0".to_string(),
             hash: index.to_string(),
-            ballot_index: index.to_string(),
+            ballot_index: "".to_string(),
             observed_external_height: "0".to_string(),
             gas_used: "0".to_string(),
             effective_gas_price: "0".to_string(),
@@ -130,7 +132,7 @@ async fn test_traverse_and_update_tree_relationships() {
 
     // Insert CHILD1 without parent/root links
     let child1_index = "child1";
-    let child1_tx = dummy_cross_chain_tx(child1_index);
+    let child1_tx = dummy_cross_chain_tx(child1_index, "PendingOutbound");
     let tx = db_conn.begin().await.unwrap();
     database
         .batch_insert_transactions(Uuid::new_v4(), &vec![child1_tx.clone()], &tx)
@@ -148,7 +150,7 @@ async fn test_traverse_and_update_tree_relationships() {
 
     // Insert GRANDCHILD that references CHILD1 as its parent, but root is unknown
     let grandchild_index = "grandchild";
-    let grandchild_tx = dummy_cross_chain_tx(grandchild_index);
+    let grandchild_tx = dummy_cross_chain_tx(grandchild_index, "PendingOutbound");
     // insert grandchild first
     let tx2 = db_conn.begin().await.unwrap();
     database

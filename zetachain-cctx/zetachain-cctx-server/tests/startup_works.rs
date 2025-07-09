@@ -22,7 +22,10 @@ async fn test_startup_works() {
     let client = Client::new(RpcSettings::default());
     let base = helpers::init_zetachain_cctx_server(
         db_url,
-        |x| x,
+        |mut x| {
+            x.tracing.enabled = false;
+            x
+        },
         db.client(),
         Arc::new(client),
     ).await;
