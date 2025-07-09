@@ -8,7 +8,7 @@ use sea_orm::ConnectionTrait;
 use sea_orm::{
     ActiveValue, DatabaseConnection, DatabaseTransaction, DbBackend, Statement, TransactionTrait,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use tracing::{instrument, Instrument};
 use uuid::Uuid;
 use zetachain_cctx_entity::sea_orm_active_enums::ProcessingStatus;
@@ -49,7 +49,7 @@ pub struct CompleteCctx {
 #[derive(Debug)]
 pub struct CctxListItem {
     pub index: String,
-    pub status: CctxStatusStatus,
+    pub status: String,
     pub amount: String,
     pub source_chain_id: String,
     pub target_chain_id: String,
@@ -166,7 +166,7 @@ impl ZetachainCctxDatabase {
             parent_id
         );
         CrossChainTxEntity::Entity::update_many()
-            .filter(CrossChainTxEntity::Column::Id.is_in(cctx_ids))
+            .filter(CrossChainTxEntity::Column::Id.is_in(cctx_ids.iter().cloned()))
             .set(CrossChainTxEntity::ActiveModel {
                 root_id: ActiveValue::Set(Some(root_id)),
                 depth: ActiveValue::Set(depth),
@@ -1279,45 +1279,226 @@ impl ZetachainCctxDatabase {
     }
 
     pub async fn get_complete_cctx(&self, index: String) -> anyhow::Result<Option<CompleteCctx>> {
-        // First get the main CCTX
-        let cctx = CrossChainTxEntity::Entity::find()
-            .filter(CrossChainTxEntity::Column::Index.eq(&index))
-            .one(self.db.as_ref())
-            .await?;
+        // Single query to get all data with JOINs
+        let sql = r#"
+        SELECT 
+            -- CrossChainTx fields
+            cctx.id as cctx_id,
+            cctx.creator,
+            cctx.index,
+            cctx.zeta_fees,
+            cctx.retries_number,
+            cctx.processing_status::text,
+            cctx.relayed_message,
+            cctx.last_status_update_timestamp,
+            cctx.protocol_contract_version::text,
+            cctx.root_id,
+            cctx.parent_id,
+            cctx.depth,
+            cctx.updated_by,
+            -- CctxStatus fields
+            cs.id as status_id,
+            cs.cross_chain_tx_id as status_cross_chain_tx_id,
+            cs.status,
+            cs.status_message::text,
+            cs.error_message,
+            cs.last_update_timestamp,
+            cs.is_abort_refunded,
+            cs.created_timestamp,
+            cs.error_message_revert,
+            cs.error_message_abort,
+            -- InboundParams fields
+            ip.id as inbound_id,
+            ip.cross_chain_tx_id as inbound_cross_chain_tx_id,
+            ip.sender,
+            ip.sender_chain_id,
+            ip.tx_origin,
+            ip.coin_type::text,
+            ip.asset,
+            ip.amount,
+            ip.observed_hash,
+            ip.observed_external_height,
+            ip.ballot_index,
+            ip.finalized_zeta_height,
+            ip.tx_finalization_status::text,
+            ip.is_cross_chain_call,
+            ip.status::text as inbound_status,
+            ip.confirmation_mode::text as inbound_confirmation_mode,
+            -- RevertOptions fields
+            ro.id as revert_id,
+            ro.cross_chain_tx_id as revert_cross_chain_tx_id,
+            ro.revert_address,
+            ro.call_on_revert,
+            ro.abort_address,
+            ro.revert_message,
+            ro.revert_gas_limit
+        FROM cross_chain_tx cctx
+        LEFT JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
+        LEFT JOIN inbound_params ip ON cctx.id = ip.cross_chain_tx_id
+        LEFT JOIN revert_options ro ON cctx.id = ro.cross_chain_tx_id
+        WHERE cctx.index = $1
+        "#;
 
-        let cctx = match cctx {
-            Some(cctx) => cctx,
-            None => return Ok(None),
+        let statement = Statement::from_sql_and_values(DbBackend::Postgres, sql, vec![
+            sea_orm::Value::String(Some(Box::new(index.clone())))
+        ]);
+
+        let rows = self.db.query_all(statement).await?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        // Get the first row for main CCTX, status, inbound, and revert data
+        let row = &rows[0];
+        
+        // Check if required entities exist
+        let status_id: Option<i32> = row.try_get_by_index(14)?;
+        let inbound_id: Option<i32> = row.try_get_by_index(26)?;
+        let revert_id: Option<i32> = row.try_get_by_index(42)?;
+
+        if status_id.is_none() {
+            return Err(anyhow::anyhow!("CCTX status not found for index: {}", index));
+        }
+        if inbound_id.is_none() {
+            return Err(anyhow::anyhow!("Inbound params not found for index: {}", index));
+        }
+        if revert_id.is_none() {
+            return Err(anyhow::anyhow!("Revert options not found for index: {}", index));
+        }
+
+        // Build CrossChainTx
+        let cctx = CrossChainTxEntity::Model {
+            id: row.try_get_by_index(0)?,
+            creator: row.try_get_by_index(1)?,
+            index: row.try_get_by_index(2)?,
+            zeta_fees: row.try_get_by_index(3)?,
+            retries_number: row.try_get_by_index(4)?,
+            processing_status: ProcessingStatus::try_from(row.try_get_by_index::<String>(5)?)
+                .map_err(|_| sea_orm::DbErr::Custom("Invalid processing_status".to_string()))?,
+            relayed_message: row.try_get_by_index(6)?,
+            last_status_update_timestamp: row.try_get_by_index(7)?,
+            protocol_contract_version: ProtocolContractVersion::try_from(row.try_get_by_index::<String>(8)?)
+                .map_err(|_| sea_orm::DbErr::Custom("Invalid protocol_contract_version".to_string()))?,
+            root_id: row.try_get_by_index(9)?,
+            parent_id: row.try_get_by_index(10)?,
+            depth: row.try_get_by_index(11)?,
+            updated_by: row.try_get_by_index(12)?,
         };
 
-        // Get all related entities
-        let status = cctx_status::Entity::find()
-            .filter(cctx_status::Column::CrossChainTxId.eq(cctx.id))
-            .one(self.db.as_ref())
-            .await?;
+        // Build CctxStatus
+        let status = cctx_status::Model {
+            id: row.try_get_by_index(13)?,
+            cross_chain_tx_id: row.try_get_by_index(14)?,
+            status: CctxStatusStatus::try_from(row.try_get_by_index::<String>(15)?)
+                .map_err(|_| sea_orm::DbErr::Custom("Invalid status".to_string()))?,
+            status_message: row.try_get_by_index(16)?,
+            error_message: row.try_get_by_index(17)?,
+            last_update_timestamp: row.try_get_by_index(18)?,
+            is_abort_refunded: row.try_get_by_index(19)?,
+            created_timestamp: row.try_get_by_index(20)?,
+            error_message_revert: row.try_get_by_index(21)?,
+            error_message_abort: row.try_get_by_index(22)?,
+        };
 
-        let inbound = InboundParamsEntity::Entity::find()
-            .filter(InboundParamsEntity::Column::CrossChainTxId.eq(cctx.id))
-            .one(self.db.as_ref())
-            .await?;
+        // Build InboundParams
+        let inbound = InboundParamsEntity::Model {
+            id: row.try_get_by_index(23)?,
+            cross_chain_tx_id: row.try_get_by_index(24)?,
+            sender: row.try_get_by_index(25)?,
+            sender_chain_id: row.try_get_by_index(26)?,
+            tx_origin: row.try_get_by_index(27)?,
+            coin_type: CoinType::try_from(row.try_get_by_index::<String>(28)?)
+                .map_err(|_| sea_orm::DbErr::Custom("Invalid coin_type".to_string()))?,
+            asset: row.try_get_by_index(29)?,
+            amount: row.try_get_by_index(30)?,
+            observed_hash: row.try_get_by_index(31)?,
+            observed_external_height: row.try_get_by_index(32)?,
+            ballot_index: row.try_get_by_index(33)?,
+            finalized_zeta_height: row.try_get_by_index(34)?,
+            tx_finalization_status: TxFinalizationStatus::try_from(row.try_get_by_index::<String>(35)?)
+                .map_err(|_| sea_orm::DbErr::Custom("Invalid tx_finalization_status".to_string()))?,
+            is_cross_chain_call: row.try_get_by_index(36)?,
+            status: InboundStatus::try_from(row.try_get_by_index::<String>(37)?)
+                .map_err(|_| sea_orm::DbErr::Custom("Invalid inbound_status".to_string()))?,
+            confirmation_mode: ConfirmationMode::try_from(row.try_get_by_index::<String>(38)?)
+                .map_err(|_| sea_orm::DbErr::Custom("Invalid inbound_confirmation_mode".to_string()))?,
+        };
 
-        let outbounds = OutboundParamsEntity::Entity::find()
-            .filter(OutboundParamsEntity::Column::CrossChainTxId.eq(cctx.id))
-            .all(self.db.as_ref())
-            .await?;
+        // Build RevertOptions
+        let revert = RevertOptionsEntity::Model {
+            id: row.try_get_by_index(39)?,
+            cross_chain_tx_id: row.try_get_by_index(40)?,
+            revert_address: row.try_get_by_index(41)?,
+            call_on_revert: row.try_get_by_index(42)?,
+            abort_address: row.try_get_by_index(43)?,
+            revert_message: row.try_get_by_index(44)?,
+            revert_gas_limit: row.try_get_by_index(45)?,
+        };
 
-        let revert = RevertOptionsEntity::Entity::find()
-            .filter(RevertOptionsEntity::Column::CrossChainTxId.eq(cctx.id))
-            .one(self.db.as_ref())
-            .await?;
+        // Now get outbound params (can be multiple, so we need a separate query)
+        let outbounds_sql = r#"
+        SELECT 
+            id,
+            cross_chain_tx_id,
+            receiver,
+            receiver_chain_id,
+            coin_type,
+            amount,
+            tss_nonce,
+            gas_limit,
+            gas_price,
+            gas_priority_fee,
+            hash,
+            ballot_index,
+            observed_external_height,
+            gas_used,
+            effective_gas_price,
+            effective_gas_limit,
+            tss_pubkey,
+            tx_finalization_status,
+            call_options_gas_limit,
+            call_options_is_arbitrary_call,
+            confirmation_mode
+        FROM outbound_params
+        WHERE cross_chain_tx_id = $1
+        "#;
 
-        // Ensure all required entities exist
-        let status =
-            status.ok_or_else(|| anyhow::anyhow!("CCTX status not found for index: {}", index))?;
-        let inbound = inbound
-            .ok_or_else(|| anyhow::anyhow!("Inbound params not found for index: {}", index))?;
-        let revert = revert
-            .ok_or_else(|| anyhow::anyhow!("Revert options not found for index: {}", index))?;
+        let outbounds_statement = Statement::from_sql_and_values(DbBackend::Postgres, outbounds_sql, vec![
+            sea_orm::Value::Int(Some(cctx.id))
+        ]);
+
+        let outbounds_rows = self.db.query_all(outbounds_statement).await?;
+        let mut outbounds = Vec::new();
+
+        for outbound_row in outbounds_rows {
+            outbounds.push(OutboundParamsEntity::Model {
+                id: outbound_row.try_get_by_index(0)?,
+                cross_chain_tx_id: outbound_row.try_get_by_index(1)?,
+                receiver: outbound_row.try_get_by_index(2)?,
+                receiver_chain_id: outbound_row.try_get_by_index(3)?,
+                coin_type: CoinType::try_from(outbound_row.try_get_by_index::<String>(4)?)
+                    .map_err(|_| sea_orm::DbErr::Custom("Invalid outbound coin_type".to_string()))?,
+                amount: outbound_row.try_get_by_index(5)?,
+                tss_nonce: outbound_row.try_get_by_index(6)?,
+                gas_limit: outbound_row.try_get_by_index(7)?,
+                gas_price: outbound_row.try_get_by_index(8)?,
+                gas_priority_fee: outbound_row.try_get_by_index(9)?,
+                hash: outbound_row.try_get_by_index(10)?,
+                ballot_index: outbound_row.try_get_by_index(11)?,
+                observed_external_height: outbound_row.try_get_by_index(12)?,
+                gas_used: outbound_row.try_get_by_index(13)?,
+                effective_gas_price: outbound_row.try_get_by_index(14)?,
+                effective_gas_limit: outbound_row.try_get_by_index(15)?,
+                tss_pubkey: outbound_row.try_get_by_index(16)?,
+                tx_finalization_status: TxFinalizationStatus::try_from(outbound_row.try_get_by_index::<String>(17)?)
+                    .map_err(|_| sea_orm::DbErr::Custom("Invalid outbound tx_finalization_status".to_string()))?,
+                call_options_gas_limit: outbound_row.try_get_by_index(18)?,
+                call_options_is_arbitrary_call: outbound_row.try_get_by_index(19)?,
+                confirmation_mode: ConfirmationMode::try_from(outbound_row.try_get_by_index::<String>(20)?)
+                    .map_err(|_| sea_orm::DbErr::Custom("Invalid outbound confirmation_mode".to_string()))?,
+            });
+        }
 
         Ok(Some(CompleteCctx {
             cctx,
@@ -1337,7 +1518,7 @@ impl ZetachainCctxDatabase {
         let mut sql = String::from(r#"
         SELECT 
         cctx.index,
-        cs.status,
+        cs.status::text,
         op.amount,
         ip.sender_chain_id,
         op.receiver_chain_id
@@ -1353,7 +1534,7 @@ impl ZetachainCctxDatabase {
         // Add status filter if provided
         if let Some(status) = status_filter {
             param_count += 1;
-            sql.push_str(&format!(" WHERE cs.status = ${}", param_count));
+            sql.push_str(&format!(" WHERE cs.status::text = ${}", param_count));
             params.push(sea_orm::Value::String(Some(Box::new(status))));
         }
 
@@ -1366,16 +1547,16 @@ impl ZetachainCctxDatabase {
         sql.push_str(&format!(" OFFSET ${}", param_count));
         params.push(sea_orm::Value::BigInt(Some(offset)));
 
-        let statement = Statement::from_sql_and_values(DbBackend::Postgres, sql, params);
+
+        let statement = Statement::from_sql_and_values(DbBackend::Postgres, sql.clone(), params);
 
         let rows = self.db.query_all(statement).await?;
 
         let mut items = Vec::new();
         for row in rows {
-            let status_str: String = row.try_get_by_index(1)?;
-            let status = CctxStatusStatus::try_from(status_str)
-                .map_err(|_| sea_orm::DbErr::Custom("Invalid status".to_string()))?;
-            
+            // Read the status enum directly from the database
+            let status = row.try_get_by_index::<String>(1)?;
+
             items.push(CctxListItem {
                 index: row.try_get_by_index(0)?,
                 status,

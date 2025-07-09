@@ -4,7 +4,7 @@ use tonic::{Request, Response, Status};
 
 use zetachain_cctx_logic::database::{ZetachainCctxDatabase};
 use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::{
-    cctx_info_service_server::CctxInfoService, CallOptions, CctxListItem, CrossChainTx, GetCctxInfoRequest, InboundParams, ListCctxsRequest, ListCctxsResponse, OutboundParams, RevertOptions, Status as CCTXStatus
+    cctx_info_service_server::CctxInfoService, CallOptions, CctxListItem, CctxStatus, CrossChainTx, GetCctxInfoRequest, InboundParams, ListCctxsRequest, ListCctxsResponse, OutboundParams, RevertOptions, Status as CCTXStatus
 };
 
 
@@ -28,18 +28,23 @@ impl CctxInfoService for CctxService {
         let request = request.into_inner();
 
         let status = request.status.map(|s| s.to_string());
-        let cctx_items = self.database.list_cctxs(request.limit, request.offset, status).await.map_err(|e| Status::internal(e.to_string()))?;
+        let cctx_items = self
+        .database
+        .list_cctxs(request.limit, request.offset, status)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
 
-        let cctxs = cctx_items.into_iter().map(|cctx| { 
-            CctxListItem {
+        let cctxs:Result<Vec<CctxListItem>, Status> = cctx_items.into_iter().map(|cctx| { 
+            let status = CctxStatus::from_str_name(cctx.status.as_str())
+            .ok_or(Status::internal(format!("Index: {}, Invalid status: {}", cctx.index, cctx.status)))?;
+            Ok(CctxListItem {
                 index: cctx.index,
-                status: cctx.status.into(),
+                status: status.into(),
                 amount: cctx.amount,
                 source_chain_id: cctx.source_chain_id,
                 target_chain_id: cctx.target_chain_id,
-            }
-        }).collect();
-        Ok(Response::new(ListCctxsResponse { cctxs }))
+            })}).collect();
+        Ok(Response::new(ListCctxsResponse { cctxs: cctxs? }))
     }
     async fn get_cctx_info(&self, request: Request<GetCctxInfoRequest>) -> Result<Response<CrossChainTx>, Status> {
 
