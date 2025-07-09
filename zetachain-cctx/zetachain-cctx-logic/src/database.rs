@@ -1590,9 +1590,10 @@ order by 2"#;
         SELECT 
         cctx.index,
         cs.status::text,
-        op.amount,
+        string_agg(op.amount::text, ',')  AS amount,
         ip.sender_chain_id,
-        op.receiver_chain_id
+        string_agg(op.receiver_chain_id::text, ',') AS receiver_chain_id,
+        MAX(cs.created_timestamp) AS created_ts
         FROM cross_chain_tx cctx
         INNER JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
         INNER JOIN inbound_params ip ON cctx.id = ip.cross_chain_tx_id
@@ -1609,9 +1610,12 @@ order by 2"#;
             params.push(sea_orm::Value::String(Some(Box::new(status))));
         }
 
+        // Aggregate multiple outbound_params rows into a single row per CCTX
+        sql.push_str(" GROUP BY cctx.index, cs.status, ip.sender_chain_id ");
+
         // Add ordering and pagination
         param_count += 1;
-        sql.push_str(&format!(" ORDER BY cs.created_timestamp DESC LIMIT ${}", param_count));
+        sql.push_str(&format!(" ORDER BY created_ts DESC LIMIT ${}", param_count));
         params.push(sea_orm::Value::BigInt(Some(limit)));
         
         param_count += 1;

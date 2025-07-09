@@ -51,11 +51,11 @@ async fn test_list_cctxs_endpoint() {
     assert!(response.get("cctxs").unwrap().is_array());
     let cctxs: Vec<CctxListItem> = serde_json::from_value(response.get("cctxs").unwrap().clone()).unwrap();
     assert_eq!(cctxs.len(), 1);
-    assert_eq!(cctxs[0].index, "1");
+    assert_eq!(cctxs[0].index, "test_list_cctxs_endpoint_1");
     assert_eq!(cctxs[0].status, 1);
-    assert_eq!(cctxs[0].amount, "1000000000000000000");
+    assert_eq!(cctxs[0].amount, "42691234567890,1000000000000000000");
     assert_eq!(cctxs[0].source_chain_id, "1");
-    assert_eq!(cctxs[0].target_chain_id, "2");
+    assert_eq!(cctxs[0].target_chain_id, "3,2");
 }
 
 #[tokio::test]
