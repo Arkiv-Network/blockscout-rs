@@ -50,3 +50,4 @@ blockscout-service-launcher = { workspace = true, features = [
 ] }
 pretty_assertions = "1.3"
 zetachain-cctx-migration = { path = "../zetachain-cctx-migration" }
+wiremock = {workspace = true}

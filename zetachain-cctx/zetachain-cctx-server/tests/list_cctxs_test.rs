@@ -18,7 +18,7 @@ async fn test_list_cctxs_endpoint() {
         db_url,
         |mut x| {
             x.indexer.enabled = false;
-            x.tracing.enabled = false;
+            x.tracing.enabled = true;
             x
         },
         db.client(),
@@ -26,7 +26,7 @@ async fn test_list_cctxs_endpoint() {
     )
     .await;
 
-    let dummy_cctxs: Vec<CrossChainTx> = vec!["1"]
+    let dummy_cctxs: Vec<CrossChainTx> = vec!["test_list_cctxs_endpoint_1"]
         .iter()
         .map(|x| 
             crate::helpers::dummy_cross_chain_tx(x, "PendingOutbound")
@@ -73,12 +73,12 @@ async fn test_list_cctxs_with_status_filter() {
         }, db.client(), Arc::new(client))
             .await;
 
-    let dummy_cctxs: Vec<CrossChainTx> = vec!["1", "2"]
+    let dummy_cctxs: Vec<CrossChainTx> = vec!["test_list_cctxs_with_status_filter_1", "test_list_cctxs_with_status_filter_2"]
     .iter()
     .map(|x| 
         crate::helpers::dummy_cross_chain_tx(x, "PendingInbound")
     )
-    .chain(vec!["3", "4", "5"]
+    .chain(vec!["test_list_cctxs_with_status_filter_3", "test_list_cctxs_with_status_filter_4", "test_list_cctxs_with_status_filter_5"]
     .iter()
     .map(|x| 
         crate::helpers::dummy_cross_chain_tx(x, "PendingOutbound")

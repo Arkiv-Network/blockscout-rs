@@ -1,14 +1,9 @@
-use blockscout_service_launcher::{test_database::TestDbGuard, test_server};
+use blockscout_service_launcher::{test_database::TestDbGuard};
 use chrono::Utc;
-use reqwest::Url;
-use sea_orm::DatabaseConnection;
 use serde_json::Value;
-use std::sync::Arc;
-use zetachain_cctx_logic::client::Client;
 use zetachain_cctx_logic::models::{
     CallOptions, CctxStatus, CrossChainTx, InboundParams, OutboundParams, RevertOptions,
 };
-use zetachain_cctx_server::Settings;
 
 #[allow(dead_code)]
 pub async fn init_db(db_prefix: &str, test_name: &str) -> TestDbGuard {
@@ -17,6 +12,16 @@ pub async fn init_db(db_prefix: &str, test_name: &str) -> TestDbGuard {
     TestDbGuard::new::<migration::Migrator>(db_name.as_str()).await
 }
 
+#[allow(dead_code)]
+pub fn empty_cctx_response() -> Value {
+    serde_json::json!({
+        "CrossChainTx": [],
+        "pagination": {
+            "next_key": "end",
+            "total": "0"
+        }
+    })
+}
 #[allow(dead_code)]
 pub async fn init_tests_logs() {
     blockscout_service_launcher::tracing::init_logs(
@@ -29,35 +34,6 @@ pub async fn init_tests_logs() {
     )
     .unwrap();
 }
-
-#[allow(dead_code)]
-pub async fn init_zetachain_cctx_server<F>(
-    db_url: String,
-    settings_setup: F,
-    db: Arc<DatabaseConnection>,
-    client: Arc<Client>,
-) -> Url
-where
-    F: Fn(Settings) -> Settings,
-{
-    // Initialize tracing for server tests
-    // init_tracing();
-
-    let (settings, base) = {
-        let mut settings = Settings::default(db_url);
-        let (server_settings, base) = test_server::get_test_server_settings();
-        settings.server = server_settings;
-        settings.metrics.enabled = false;
-        settings.tracing.enabled = true;
-        settings.jaeger.enabled = false;
-
-        (settings_setup(settings), base)
-    };
-
-    test_server::init_server(|| zetachain_cctx_server::run(settings, db, client), &base).await;
-    base
-}
-
 #[allow(dead_code)]
 pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
     CrossChainTx {

@@ -44,6 +44,7 @@ pub struct CompleteCctx {
     pub inbound: InboundParamsEntity::Model,
     pub outbounds: Vec<OutboundParamsEntity::Model>,
     pub revert: RevertOptionsEntity::Model,
+    pub related: Vec<RelatedCctx>,
 }
 
 #[derive(Debug)]
@@ -53,6 +54,19 @@ pub struct CctxListItem {
     pub amount: String,
     pub source_chain_id: String,
     pub target_chain_id: String,
+}
+
+#[derive(Debug)]
+pub struct RelatedCctx {
+    pub index: String,
+    pub depth: i32,
+    pub source_chain_id: String,
+    pub target_chain_id: String,
+    pub status: String,
+    pub inbound_amount: String,
+    pub outbound_amount: String,
+    pub inbound_coin_type: String,
+    pub outbound_coin_type: String,
 }
 #[derive(Debug)]
 pub struct CctxWithStatus {
@@ -544,8 +558,8 @@ impl ZetachainCctxDatabase {
                         .map_err(|e| anyhow::anyhow!(e))?,
                 ),
                 last_status_update_timestamp: ActiveValue::Set(Utc::now().naive_utc()),
-                root_id: ActiveValue::Set(None), //TODO: link to self
-                parent_id: ActiveValue::Set(None), //TODO: link to self
+                root_id: ActiveValue::Set(None), //When querying we treat None as being your own root
+                parent_id: ActiveValue::Set(None),
                 depth: ActiveValue::Set(0),
                 updated_by: ActiveValue::Set(job_id.to_string()),
             };
@@ -1510,12 +1524,59 @@ impl ZetachainCctxDatabase {
             });
         }
 
+        let related_sql = r#"select
+    related.index,
+    related.depth,
+    ip.sender_chain_id,
+    op.receiver_chain_id,
+    op.amount,
+    cs.status,
+    related.depth,
+    ip.coin_type,
+    ip.asset,
+    op.hash,
+    op.coin_type,
+    op.amount
+from
+    cross_chain_tx cctx
+    join cross_chain_tx root on cctx.root_id = root.id
+    join cross_chain_tx related on COALESCE(related.root_id, related.id) = root.id
+    and related.id != cctx.id
+    join cctx_status cs on related.id = cs.cross_chain_tx_id
+    join inbound_params ip on related.id = ip.cross_chain_tx_id
+    join outbound_params op on related.id = op.cross_chain_tx_id
+where
+    cctx.index = $1
+order by 2"#;
+
+        let related_statement = Statement::from_sql_and_values(DbBackend::Postgres, related_sql, vec![
+            sea_orm::Value::String(Some(Box::new(index)))
+        ]);
+
+        let related_rows = self.db.query_all(related_statement).await?;
+        let mut related = Vec::new();
+
+        for related_row in related_rows {
+            related.push(RelatedCctx {
+                index: related_row.try_get_by_index(0)?,
+                depth: related_row.try_get_by_index(1)?,
+                source_chain_id: related_row.try_get_by_index(2)?,
+                target_chain_id: related_row.try_get_by_index(3)?,
+                status: related_row.try_get_by_index(4)?,
+                inbound_amount: related_row.try_get_by_index(5)?,
+                outbound_amount: related_row.try_get_by_index(6)?,
+                inbound_coin_type: related_row.try_get_by_index(7)?,
+                outbound_coin_type: related_row.try_get_by_index(8)?,
+            });
+        }
+
         Ok(Some(CompleteCctx {
             cctx,
             status,
             inbound,
             outbounds,
             revert,
+            related,
         }))
     }
 
@@ -1575,6 +1636,8 @@ impl ZetachainCctxDatabase {
                 target_chain_id: row.try_get_by_index(4)?,
             });
         }
+
+        tracing::info!("items: {:?}", items);
 
         Ok(items)
     }
