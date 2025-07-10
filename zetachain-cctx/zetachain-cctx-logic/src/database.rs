@@ -217,7 +217,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "info", skip_all)]
     pub async fn traverse_and_update_tree_relationships(
         &self,
         children_cctxs: Vec<CrossChainTx>,
@@ -230,7 +230,7 @@ impl ZetachainCctxDatabase {
         let (need_to_import, need_to_update_ids) = self
             .find_outdated_children_by_index(children_cctxs, cctx.id, root_id, &tx)
             .await?;
-        tracing::debug!(
+        tracing::info!(
             "need_to_import: {:?}, need_to_update_ids: {:?}",
             need_to_import,
             need_to_update_ids
@@ -578,12 +578,6 @@ impl ZetachainCctxDatabase {
             .await?;
 
         tracing::info!("job_id: {}, inserted cctxs: {}", job_id, inserted_cctxs.len());
-        if inserted_cctxs.len() != cctxs.len() {
-            tracing::error!("inserted_cctxs.len() != cctxs.len(),\n
-            job_id: {}, cctxs.len(): {},\n
-            inserted_cctxs.len(): {}",
-            job_id, cctxs.len(), inserted_cctxs.len());
-        }
         // Create a map from index to id for quick lookup
         let index_to_id: std::collections::HashMap<String, i32> = inserted_cctxs
             .into_iter()
