@@ -18,7 +18,7 @@ async fn test_list_cctxs_endpoint() {
         db_url,
         |mut x| {
             x.indexer.enabled = false;
-            x.tracing.enabled = true;
+            x.tracing.enabled = false;
             x
         },
         db.client(),

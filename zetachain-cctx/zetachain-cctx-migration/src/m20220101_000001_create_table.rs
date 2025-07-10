@@ -26,7 +26,7 @@ impl MigrationTrait for Migration {
                     CREATE TYPE confirmation_mode AS ENUM ('SAFE', 'FAST');
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'coin_type') THEN
-                    CREATE TYPE coin_type AS ENUM ('Zeta', 'Gas', 'ERC20', 'Cmd', 'NoAssetCall');
+                    CREATE TYPE coin_type AS ENUM ('Zeta', 'Gas', 'Erc20', 'Cmd', 'NoAssetCall');
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'protocol_contract_version') THEN
                     CREATE TYPE protocol_contract_version AS ENUM ('V1', 'V2');
@@ -269,7 +269,7 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(InboundParams::TxOrigin).string().not_null())
-                    .col(ColumnDef::new(InboundParams::CoinType).enumeration("coin_type", ["Zeta", "Gas", "ERC20", "Cmd", "NoAssetCall"]).not_null())
+                    .col(ColumnDef::new(InboundParams::CoinType).enumeration("coin_type", ["Zeta", "Gas", "Erc20", "Cmd", "NoAssetCall"]).not_null())
                     .col(ColumnDef::new(InboundParams::Asset).string().null())
                     .col(ColumnDef::new(InboundParams::Amount).string().not_null())
                     .col(
@@ -352,7 +352,7 @@ impl MigrationTrait for Migration {
                             .string()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(OutboundParams::CoinType).enumeration("coin_type", ["Zeta", "Gas", "ERC20", "Cmd", "NoAssetCall"]).not_null())
+                    .col(ColumnDef::new(OutboundParams::CoinType).enumeration("coin_type", ["Zeta", "Gas", "Erc20", "Cmd", "NoAssetCall"]).not_null())
                     .col(ColumnDef::new(OutboundParams::Amount).string().not_null())
                     .col(ColumnDef::new(OutboundParams::TssNonce).string().not_null())
                     .col(ColumnDef::new(OutboundParams::GasLimit).string().not_null())

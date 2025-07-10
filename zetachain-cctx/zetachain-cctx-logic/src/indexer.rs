@@ -110,7 +110,7 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
     Ok(())
 }
 
-#[instrument(,level="debug",skip(database, client,cctx), fields(job_id = %job_id, cctx_index = %cctx.index))]
+#[instrument(,level="info",skip(database, client,cctx), fields(job_id = %job_id, cctx_index = %cctx.index))]
 async fn refresh_status_and_link_related(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -123,7 +123,7 @@ async fn refresh_status_and_link_related(
 }
 
 
-#[instrument(,level="debug",skip_all)]
+#[instrument(,level="info",skip_all)]
 async fn update_cctx_relations(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -135,7 +135,7 @@ async fn update_cctx_relations(
         .get_inbound_hash_to_cctx_data(&cctx.index)
         .await.map_err(|e| anyhow::format_err!("Failed to fetch children: {}", e))?;
     
-    tracing::debug!("children_response: {:?}", children_response);
+    tracing::info!("job_id: {}, children_response: {:?}", job_id, children_response);
     database
     .traverse_and_update_tree_relationships(children_response.cross_chain_txs, cctx, job_id)
     .await
@@ -323,7 +323,7 @@ impl Indexer {
                     match job {
                         IndexerJob::StatusUpdate(cctx, job_id) => {
                             if let Err(e) =  refresh_status_and_link_related(database.clone(), &client, &cctx, job_id).await {
-                                tracing::error!(error = %e, job_id = %job_id, index = %cctx.index, "Failed to refresh status and link related cctx");
+                                tracing::info!(error = %e, job_id = %job_id, index = %cctx.index, "Failed to refresh status and link related cctx");
                                 if cctx.retries_number == retry_threshold as i32 {
                                     database.mark_cctx_as_failed(&cctx).await.unwrap();
                                 } else {

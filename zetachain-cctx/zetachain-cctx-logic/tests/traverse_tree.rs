@@ -41,7 +41,7 @@ pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
             sender: "sender".to_string(),
             sender_chain_id: "1".to_string(),
             tx_origin: "origin".to_string(),
-            coin_type: "Zeta".to_string(),
+            coin_type: zetachain_cctx_logic::models::CoinType::Zeta,
             asset: "".to_string(),
             amount: "0".to_string(),
             observed_hash: index.to_string(),
@@ -56,7 +56,7 @@ pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
         outbound_params: vec![OutboundParams {
             receiver: "receiver".to_string(),
             receiver_chain_id: "2".to_string(),
-            coin_type: "Zeta".to_string(),
+            coin_type: zetachain_cctx_logic::models::CoinType::Zeta,
             amount: "1000000000000000000".to_string(),
             tss_nonce: "0".to_string(),
             gas_limit: "0".to_string(),

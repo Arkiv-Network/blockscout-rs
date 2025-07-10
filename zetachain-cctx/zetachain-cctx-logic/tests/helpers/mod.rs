@@ -4,6 +4,7 @@ use serde_json::Value;
 use zetachain_cctx_logic::models::{
     CallOptions, CctxStatus, CrossChainTx, InboundParams, OutboundParams, RevertOptions,
 };
+use zetachain_cctx_logic::models::CoinType;
 
 #[allow(dead_code)]
 pub async fn init_db(db_prefix: &str, test_name: &str) -> TestDbGuard {
@@ -55,7 +56,7 @@ pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
             sender: "sender".to_string(),
             sender_chain_id: "1".to_string(),
             tx_origin: "origin".to_string(),
-            coin_type: "Zeta".to_string(),
+            coin_type: CoinType::ERC20,
             asset: "".to_string(),
             amount: "0".to_string(),
             observed_hash: index.to_string(),
@@ -70,7 +71,7 @@ pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
         outbound_params: vec![OutboundParams {
             receiver: "receiver".to_string(),
             receiver_chain_id: "2".to_string(),
-            coin_type: "Zeta".to_string(),
+            coin_type: CoinType::Zeta,
             amount: "1000000000000000000".to_string(),
             tss_nonce: "0".to_string(),
             gas_limit: "0".to_string(),
@@ -92,7 +93,7 @@ pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
         }, OutboundParams {
             receiver: "receiver2".to_string(),
             receiver_chain_id: "3".to_string(),
-            coin_type: "ERC20".to_string(),
+            coin_type: CoinType::ERC20,
             amount: "42691234567890".to_string(),
             tss_nonce: "0".to_string(),
             gas_limit: "0".to_string(),

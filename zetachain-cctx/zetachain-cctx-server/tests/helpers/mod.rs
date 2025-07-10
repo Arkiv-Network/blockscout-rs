@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use zetachain_cctx_logic::client::Client;
 use zetachain_cctx_logic::models::{
-    CallOptions, CctxStatus, CrossChainTx, InboundParams, OutboundParams, RevertOptions,
+    CallOptions, CctxStatus, CoinType, CrossChainTx, InboundParams, OutboundParams, RevertOptions
 };
 use zetachain_cctx_server::Settings;
 
@@ -79,9 +79,9 @@ pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
             sender: "sender".to_string(),
             sender_chain_id: "1".to_string(),
             tx_origin: "origin".to_string(),
-            coin_type: "Zeta".to_string(),
+            coin_type: CoinType::Zeta,
             asset: "".to_string(),
-            amount: "0".to_string(),
+            amount: "8504".to_string(),
             observed_hash: index.to_string(),
             observed_external_height: "0".to_string(),
             ballot_index: index.to_string(),
@@ -94,10 +94,10 @@ pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
         outbound_params: vec![OutboundParams {
             receiver: "receiver".to_string(),
             receiver_chain_id: "2".to_string(),
-            coin_type: "Zeta".to_string(),
+            coin_type: CoinType::Zeta,
             amount: "1000000000000000000".to_string(),
-            tss_nonce: "0".to_string(),
-            gas_limit: "0".to_string(),
+            tss_nonce: "42".to_string(),
+            gas_limit: "1337".to_string(),
             gas_price: "0".to_string(),
             gas_priority_fee: "0".to_string(),
             hash: format!("{}_1", index),
@@ -116,7 +116,7 @@ pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
         }, OutboundParams {
             receiver: "receiver2".to_string(),
             receiver_chain_id: "3".to_string(),
-            coin_type: "ERC20".to_string(),
+            coin_type: CoinType::ERC20,
             amount: "42691234567890".to_string(),
             tss_nonce: "0".to_string(),
             gas_limit: "0".to_string(),
@@ -137,7 +137,7 @@ pub fn dummy_cross_chain_tx(index: &str, status: &str) -> CrossChainTx {
             confirmation_mode: "SAFE".to_string(),
         }
         ],
-        protocol_contract_version: "V1".to_string(),
+        protocol_contract_version: "V2".to_string(),
         revert_options: RevertOptions {
             revert_address: "".to_string(),
             call_on_revert: false,

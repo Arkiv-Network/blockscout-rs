@@ -152,13 +152,13 @@ definitions:
     enum:
       - Zeta
       - Gas
-      - ERC20
+      - Erc20
       - Cmd
       - NoAssetCall
     default: Zeta
     title: |-
       - Gas: Ether, BNB, Matic, Klay, BTC, etc
-       - ERC20: ERC20 token
+       - Erc20: ERC20 token
        - Cmd: no asset, used for admin command
        - NoAssetCall: no asset, used for contract call
   v1ConfirmationMode:

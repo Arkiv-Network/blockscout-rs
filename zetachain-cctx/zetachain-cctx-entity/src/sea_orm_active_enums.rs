@@ -25,7 +25,7 @@ pub enum CoinType {
     Zeta,
     #[sea_orm(string_value = "Gas")]
     Gas,
-    #[sea_orm(string_value = "ERC20")]
+    #[sea_orm(string_value = "Erc20")]
     Erc20,
     #[sea_orm(string_value = "Cmd")]
     Cmd,

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use zetachain_cctx_entity::{cctx_status, cross_chain_tx, inbound_params, outbound_params, revert_options, sea_orm_active_enums::{CctxStatusStatus, CoinType}};
+use zetachain_cctx_entity::{cctx_status, cross_chain_tx, inbound_params, outbound_params, revert_options, sea_orm_active_enums::CoinType as DbCoinType};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PagedCCTXResponse {
@@ -12,6 +12,28 @@ pub struct PagedCCTXResponse {
 pub struct CCTXResponse {
     #[serde(rename = "CrossChainTx")]
     pub cross_chain_tx: CrossChainTx,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum CoinType {
+    Zeta,
+    Gas,
+    ERC20,
+    Cmd,
+    NoAssetCall,
+}
+
+impl TryFrom<CoinType> for DbCoinType {
+    type Error = String;
+    fn try_from(value: CoinType) -> Result<Self, Self::Error> {
+        match value {
+            CoinType::Zeta => Ok(DbCoinType::Zeta),
+            CoinType::Gas => Ok(DbCoinType::Gas),
+            CoinType::ERC20 => Ok(DbCoinType::Erc20),
+            CoinType::Cmd => Ok(DbCoinType::Cmd),
+            CoinType::NoAssetCall => Ok(DbCoinType::NoAssetCall),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,7 +83,7 @@ pub struct InboundParams {
     pub sender: String,
     pub sender_chain_id: String,
     pub tx_origin: String,
-    pub coin_type: String,
+    pub coin_type: CoinType,
     pub asset: String,
     pub amount: String,
     pub observed_hash: String,
@@ -79,7 +101,7 @@ pub struct OutboundParams {
     pub receiver: String,
     #[serde(rename = "receiver_chainId")]
     pub receiver_chain_id: String,
-    pub coin_type: String,
+    pub coin_type: CoinType,
     pub amount: String,
     pub tss_nonce: String,
     pub gas_limit: String,
@@ -144,6 +166,7 @@ pub struct RelatedCctx {
     pub status: String,
     pub inbound_amount: String,
     pub inbound_coin_type: String,
+    pub inbound_asset: String,
     pub outbound_params: Vec<RelatedOutboundParams>,
 }
 
