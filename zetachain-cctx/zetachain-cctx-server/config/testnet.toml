@@ -16,17 +16,17 @@ create_database = true
 run_migrations = true
 
 [indexer]
-enabled = true
+enabled = false
 polling_interval = 1000
 concurrency=10
 historical_batch_size=1
 status_update_batch_size = 5
 realtime_fetch_batch_size = 10
 retry_threshold = 10
-failed_cctxs_polling_interval = 100000
+failed_cctxs_polling_interval = 10000
 realtime_threshold = 10000
 [rpc]
 url = "https://zetachain-athens.g.allthatnode.com/archive/rest/a0edcf7bca3748b0a115df6163411457/zeta-chain/"
-request_per_second = 20
-num_of_retries=3
-retry_delay_ms=1000
+request_per_second = 5
+num_of_retries=30
+retry_delay_ms=100

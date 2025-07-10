@@ -47,12 +47,14 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
     let database = Arc::new(ZetachainCctxDatabase::new(db.clone()));
     let health = Arc::new(HealthService::default());
     let cctx = Arc::new(CctxService::new(database.clone()));
-    let indexer = Indexer::new(settings.indexer, db, client, database);
-
-    tokio::spawn(async move {
-        //TODO: handle error, log it and restart the indexer
-        let _ = indexer.run().await;
-    });
+    
+    if settings.indexer.enabled {
+        let indexer = Indexer::new(settings.indexer, db, client, database);
+        tokio::spawn(async move {
+            //TODO: handle error, log it and restart the indexer
+            let _ = indexer.run().await;
+        });
+    }
 
     let router = Router {
         cctx,

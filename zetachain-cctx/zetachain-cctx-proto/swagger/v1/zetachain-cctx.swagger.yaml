@@ -130,6 +130,9 @@ definitions:
         type: string
       target_chain_id:
         type: string
+      last_update_timestamp:
+        type: string
+        format: int64
   v1CctxStatus:
     type: string
     enum:

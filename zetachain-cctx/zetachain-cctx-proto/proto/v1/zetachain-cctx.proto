@@ -182,6 +182,7 @@ message CctxListItem {
   string amount = 3;
   string source_chain_id = 4;
   string target_chain_id = 5;
+  int64 last_update_timestamp = 6;
 }
 
 message RelatedCctx {

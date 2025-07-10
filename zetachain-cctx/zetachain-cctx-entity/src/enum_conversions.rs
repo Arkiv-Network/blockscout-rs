@@ -202,6 +202,7 @@ impl TryFrom<String> for ProcessingStatus {
             "locked" => Ok(ProcessingStatus::Locked),
             "unlocked" => Ok(ProcessingStatus::Unlocked),
             "failed" => Ok(ProcessingStatus::Failed),
+            "done" => Ok(ProcessingStatus::Done),
             _ => Err(format!("Invalid ProcessingStatus: {}", value)),
         }
     }

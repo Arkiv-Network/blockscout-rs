@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zetachain_cctx_entity::{cctx_status, cross_chain_tx, inbound_params, outbound_params, revert_options, sea_orm_active_enums::CoinType as DbCoinType};
 
@@ -154,6 +155,7 @@ pub struct CctxListItem {
     pub index: String,
     pub status: String,
     pub amount: String,
+    pub last_update_timestamp: NaiveDateTime,
     pub source_chain_id: String,
     pub target_chain_id: String,
 }

@@ -43,6 +43,7 @@ impl CctxInfoService for CctxService {
                 amount: cctx.amount,
                 source_chain_id: cctx.source_chain_id,
                 target_chain_id: cctx.target_chain_id,
+                last_update_timestamp: cctx.last_update_timestamp.and_utc().timestamp(),
             })}).collect();
         Ok(Response::new(ListCctxsResponse { cctxs: cctxs? }))
     }

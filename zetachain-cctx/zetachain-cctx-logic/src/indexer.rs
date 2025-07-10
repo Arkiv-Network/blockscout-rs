@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -97,7 +98,7 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
     let response = client
         .list_cctxs(None, false, batch_size)
         .await
-        .unwrap();
+        .map_err(|e| anyhow::anyhow!("Failed to fetch external data: {}", e))?;
     let txs = response.cross_chain_tx;
     if txs.is_empty() {
         tracing::debug!("No new cctxs found");
@@ -110,7 +111,7 @@ async fn realtime_fetch(job_id: Uuid,database: Arc<ZetachainCctxDatabase>, clien
     Ok(())
 }
 
-#[instrument(,level="info",skip(database, client,cctx), fields(job_id = %job_id, cctx_index = %cctx.index))]
+#[instrument(,level="debug",skip(database, client,cctx), fields(job_id = %job_id, cctx_index = %cctx.index))]
 async fn refresh_status_and_link_related(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -123,7 +124,7 @@ async fn refresh_status_and_link_related(
 }
 
 
-#[instrument(,level="info",skip_all)]
+#[instrument(,level="debug",skip_all)]
 async fn update_cctx_relations(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
@@ -131,13 +132,17 @@ async fn update_cctx_relations(
     job_id: Uuid,
 ) -> anyhow::Result<()> {
     // Fetch children using the inbound hash to CCTX data endpoint
-    let children_response = client
+    let cross_chain_txs = client
         .get_inbound_hash_to_cctx_data(&cctx.index)
-        .await.map_err(|e| anyhow::format_err!("Failed to fetch children: {}", e))?;
+        .await.map_err(|e| anyhow::format_err!("Failed to fetch children: {}", e))?
+        .cross_chain_txs;
     
-    tracing::info!("job_id: {}, children_response: {:?}", job_id, children_response);
+    //turns out that we migh get duplicate cross_chain_txs, so we deduplicate them
+    let cctx_map: HashMap<String, _> = cross_chain_txs.into_iter().map(|cctx| (cctx.index.clone(), cctx)).collect();
+    let cross_chain_txs = cctx_map.values().cloned().collect::<Vec<_>>();
+    
     database
-    .traverse_and_update_tree_relationships(children_response.cross_chain_txs, cctx, job_id)
+    .traverse_and_update_tree_relationships(cross_chain_txs.clone(), cctx, job_id)
     .await
     .map_err(|e| anyhow::format_err!("Failed to traverse and update cctx tree relationships: {}", e))?;
 
@@ -174,9 +179,9 @@ impl Indexer {
             
             loop {
                 let job_id = Uuid::new_v4();
-                realtime_fetch(job_id, database.clone(), &client, batch_size)
-                .await
-                .unwrap();
+                if let Err(e) = realtime_fetch(job_id, database.clone(), &client, batch_size).await {
+                    tracing::error!(error = %e, job_id = %job_id, "Failed to fetch realtime data");
+                }
                 tokio::time::sleep(Duration::from_millis(polling_interval)).await;
             }
         })
