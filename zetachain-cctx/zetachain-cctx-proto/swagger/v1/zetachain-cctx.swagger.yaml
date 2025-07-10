@@ -195,6 +195,11 @@ definitions:
         $ref: '#/definitions/v1ProtocolContractVersion'
       revert_options:
         $ref: '#/definitions/v1RevertOptions'
+      related_cctxs:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1RelatedCctx'
   v1HealthCheckResponse:
     type: object
     properties:
@@ -324,6 +329,36 @@ definitions:
     title: |-
       ProtocolContractVersion represents the version of the protocol contract used
       for cctx workflow
+  v1RelatedCctx:
+    type: object
+    properties:
+      index:
+        type: string
+      depth:
+        type: integer
+        format: int32
+      source_chain_id:
+        type: string
+      status:
+        $ref: '#/definitions/v1CctxStatus'
+      inbound_amount:
+        type: string
+      inbound_coin_type:
+        $ref: '#/definitions/v1CoinType'
+      outbound_params:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1RelatedOutboundParams'
+  v1RelatedOutboundParams:
+    type: object
+    properties:
+      amount:
+        type: string
+      chain_id:
+        type: string
+      coin_type:
+        $ref: '#/definitions/v1CoinType'
   v1RevertOptions:
     type: object
     properties:

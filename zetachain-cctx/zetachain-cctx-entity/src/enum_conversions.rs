@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::sea_orm_active_enums::{CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, Kind, ProtocolContractVersion, TxFinalizationStatus, ProcessingStatus};
 
 impl TryFrom<String> for TxFinalizationStatus {
@@ -202,5 +204,35 @@ impl TryFrom<String> for ProcessingStatus {
             "failed" => Ok(ProcessingStatus::Failed),
             _ => Err(format!("Invalid ProcessingStatus: {}", value)),
         }
+    }
+}
+
+impl Display for ProcessingStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Display for CctxStatusStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Display for CoinType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Display for ProtocolContractVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
     }
 }

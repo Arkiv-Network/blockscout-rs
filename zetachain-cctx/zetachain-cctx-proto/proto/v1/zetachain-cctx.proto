@@ -183,6 +183,23 @@ message CctxListItem {
   string source_chain_id = 4;
   string target_chain_id = 5;
 }
+
+message RelatedCctx {
+  string index = 1;
+  int32 depth = 2;
+  string source_chain_id = 3;
+  CctxStatus status = 4;
+  string inbound_amount = 5;
+  CoinType inbound_coin_type = 6;
+  repeated RelatedOutboundParams outbound_params = 7;
+}
+
+message RelatedOutboundParams {
+  string amount = 1;
+  string chain_id = 2;
+  CoinType coin_type = 3;
+}
+
 message CrossChainTx {
   string creator = 1;
   string index = 2;
@@ -193,4 +210,5 @@ message CrossChainTx {
   repeated OutboundParams outbound_params = 10;
   ProtocolContractVersion protocol_contract_version = 11;
   RevertOptions revert_options = 12;
+  repeated RelatedCctx related_cctxs = 13;
 }

@@ -4,7 +4,7 @@ use tonic::{Request, Response, Status};
 
 use zetachain_cctx_logic::database::{ZetachainCctxDatabase};
 use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::{
-    cctx_info_service_server::CctxInfoService, CallOptions, CctxListItem, CctxStatus, CrossChainTx, GetCctxInfoRequest, InboundParams, ListCctxsRequest, ListCctxsResponse, OutboundParams, RevertOptions, Status as CCTXStatus
+    cctx_info_service_server::CctxInfoService, CallOptions, CctxListItem, CctxStatus, CoinType, CrossChainTx, GetCctxInfoRequest, InboundParams, ListCctxsRequest, ListCctxsResponse, OutboundParams, RelatedCctx, RelatedOutboundParams, RevertOptions, Status as CCTXStatus
 };
 
 
@@ -125,6 +125,22 @@ impl CctxInfoService for CctxService {
                     revert_message: entity.revert.revert_message.unwrap_or_default().as_bytes().to_vec().into(),
                     revert_gas_limit: entity.revert.revert_gas_limit,
                 }),
+                related_cctxs: entity.related.into_iter().map(|r| RelatedCctx {
+                    index: r.index.clone(),
+                    depth: r.depth,
+                    source_chain_id: r.source_chain_id,
+                    status: CctxStatus::from_str_name(r.status.as_str())
+                    .ok_or(Status::internal(format!("Index: {}, Invalid status: {}", &r.index, r.status))).unwrap().into(),
+                    inbound_amount: r.inbound_amount,
+                    inbound_coin_type: CoinType::from_str_name(r.inbound_coin_type.as_str())
+                    .ok_or(Status::internal(format!("Index: {}, Invalid coin type: {}", &r.index, r.inbound_coin_type))).unwrap().into(),
+                    outbound_params: r.outbound_params.into_iter().map(|o| RelatedOutboundParams {
+                        amount: o.amount,
+                        chain_id: o.chain_id,
+                        coin_type: CoinType::from_str_name(o.coin_type.as_str())
+                        .ok_or(Status::internal(format!("Index: {}, Invalid coin type: {}", &r.index, o.coin_type))).unwrap().into(),
+                    }).collect(),
+                }).collect(),
             };
 
 

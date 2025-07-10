@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::models::{self, CctxShort, CrossChainTx};
+use crate::models::{self, CctxListItem, CctxShort, CompleteCctx, CrossChainTx, RelatedCctx, RelatedOutboundParams};
 use anyhow::Ok;
 use chrono::Utc;
 use sea_orm::ConnectionTrait;
@@ -37,45 +37,7 @@ fn sanitize_string(input: String) -> String {
         .replace('\u{FFFD}', "?") // Replace replacement character with question mark
 }
 
-#[derive(Debug)]
-pub struct CompleteCctx {
-    pub cctx: CrossChainTxEntity::Model,
-    pub status: cctx_status::Model,
-    pub inbound: InboundParamsEntity::Model,
-    pub outbounds: Vec<OutboundParamsEntity::Model>,
-    pub revert: RevertOptionsEntity::Model,
-    pub related: Vec<RelatedCctx>,
-}
 
-#[derive(Debug)]
-pub struct CctxListItem {
-    pub index: String,
-    pub status: String,
-    pub amount: String,
-    pub source_chain_id: String,
-    pub target_chain_id: String,
-}
-
-#[derive(Debug)]
-pub struct RelatedCctx {
-    pub index: String,
-    pub depth: i32,
-    pub source_chain_id: String,
-    pub target_chain_id: String,
-    pub status: String,
-    pub inbound_amount: String,
-    pub outbound_amount: String,
-    pub inbound_coin_type: String,
-    pub outbound_coin_type: String,
-}
-#[derive(Debug)]
-pub struct CctxWithStatus {
-    pub id: i32,
-    pub index: String,
-    pub root_id: Option<i32>,
-    pub depth: i32,
-    pub retries_number: i32,
-}
 impl ZetachainCctxDatabase {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self { db }
@@ -1518,30 +1480,33 @@ impl ZetachainCctxDatabase {
             });
         }
 
-        let related_sql = r#"select
-    related.index,
-    related.depth,
-    ip.sender_chain_id,
-    op.receiver_chain_id,
-    op.amount,
-    cs.status,
-    related.depth,
-    ip.coin_type,
-    ip.asset,
-    op.hash,
-    op.coin_type,
-    op.amount
-from
-    cross_chain_tx cctx
-    join cross_chain_tx root on cctx.root_id = root.id
-    join cross_chain_tx related on COALESCE(related.root_id, related.id) = root.id
-    and related.id != cctx.id
-    join cctx_status cs on related.id = cs.cross_chain_tx_id
-    join inbound_params ip on related.id = ip.cross_chain_tx_id
-    join outbound_params op on related.id = op.cross_chain_tx_id
-where
-    cctx.index = $1
-order by 2"#;
+        let related_sql = r#"
+            select
+            related.id,
+            related.index,
+            related.depth,
+            ip.sender_chain_id,
+            op.receiver_chain_id,
+            op.amount,
+            cs.status,
+            related.depth,
+            ip.coin_type,
+            ip.asset,
+            op.hash,
+            op.coin_type,
+            op.amount
+        from
+            cross_chain_tx cctx
+            join cross_chain_tx root on cctx.root_id = root.id
+            join cross_chain_tx related on COALESCE(related.root_id, related.id) = root.id
+            and related.id != cctx.id
+            join cctx_status cs on related.id = cs.cross_chain_tx_id
+            join inbound_params ip on related.id = ip.cross_chain_tx_id
+            join outbound_params op on related.id = op.cross_chain_tx_id
+        where
+            cctx.index = $1
+        order by 2
+"#;
 
         let related_statement = Statement::from_sql_and_values(DbBackend::Postgres, related_sql, vec![
             sea_orm::Value::String(Some(Box::new(index)))
@@ -1551,16 +1516,28 @@ order by 2"#;
         let mut related = Vec::new();
 
         for related_row in related_rows {
+
+            let related_id: i32 = related_row.try_get_by_index(0)?;
+            let outbound_params = OutboundParamsEntity::Entity::find()
+                .filter(OutboundParamsEntity::Column::CrossChainTxId.eq(related_id))
+                .all(self.db.as_ref())
+                .await?
+                .into_iter()
+                .map(|x| RelatedOutboundParams {
+                    amount: x.amount,
+                    chain_id: x.receiver_chain_id,
+                    coin_type: x.coin_type.to_string(),
+                })
+                .collect();
+
             related.push(RelatedCctx {
-                index: related_row.try_get_by_index(0)?,
-                depth: related_row.try_get_by_index(1)?,
-                source_chain_id: related_row.try_get_by_index(2)?,
-                target_chain_id: related_row.try_get_by_index(3)?,
-                status: related_row.try_get_by_index(4)?,
-                inbound_amount: related_row.try_get_by_index(5)?,
-                outbound_amount: related_row.try_get_by_index(6)?,
+                index: related_row.try_get_by_index(1)?,
+                depth: related_row.try_get_by_index(2)?,
+                source_chain_id: related_row.try_get_by_index(3)?,
+                status: related_row.try_get_by_index(5)?,
+                inbound_amount: related_row.try_get_by_index(6)?,
                 inbound_coin_type: related_row.try_get_by_index(7)?,
-                outbound_coin_type: related_row.try_get_by_index(8)?,
+                outbound_params,
             });
         }
 

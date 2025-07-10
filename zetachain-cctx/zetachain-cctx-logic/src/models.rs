@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use zetachain_cctx_entity::{cctx_status, cross_chain_tx, inbound_params, outbound_params, revert_options, sea_orm_active_enums::{CctxStatusStatus, CoinType}};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PagedCCTXResponse {
@@ -115,4 +116,49 @@ pub struct RevertOptions {
 pub struct Pagination {
     pub next_key: Option<String>,
     pub total: String,
+}
+#[derive(Debug)]
+pub struct CompleteCctx {
+    pub cctx: cross_chain_tx::Model,
+    pub status: cctx_status::Model,
+    pub inbound: inbound_params::Model,
+    pub outbounds: Vec<outbound_params::Model>,
+    pub revert: revert_options::Model,
+    pub related: Vec<RelatedCctx>,
+}
+
+#[derive(Debug)]
+pub struct CctxListItem {
+    pub index: String,
+    pub status: String,
+    pub amount: String,
+    pub source_chain_id: String,
+    pub target_chain_id: String,
+}
+
+#[derive(Debug)]
+pub struct RelatedCctx {
+    pub index: String,
+    pub depth: i32,
+    pub source_chain_id: String,
+    pub status: String,
+    pub inbound_amount: String,
+    pub inbound_coin_type: String,
+    pub outbound_params: Vec<RelatedOutboundParams>,
+}
+
+#[derive(Debug)]
+pub struct RelatedOutboundParams {
+    pub amount: String,
+    pub chain_id: String,
+    pub coin_type: String,
+}
+
+#[derive(Debug)]
+pub struct CctxWithStatus {
+    pub id: i32,
+    pub index: String,
+    pub root_id: Option<i32>,
+    pub depth: i32,
+    pub retries_number: i32,
 }
