@@ -1744,7 +1744,7 @@ impl ZetachainCctxDatabase {
         cctx.index, --0
         cs.status::text, --1
         cs.last_update_timestamp, --2
-        string_agg(op.amount::text, ',')  AS amount, --3
+        ip.amount, --3
         ip.sender_chain_id, --4
         string_agg(op.receiver_chain_id::text, ',') AS receiver_chain_id,
         MAX(cs.created_timestamp) AS created_ts
