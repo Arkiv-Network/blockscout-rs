@@ -7,13 +7,13 @@ use governor::{
     Quota, RateLimiter,
 };
 use reqwest::{Method, Request, Response, Url};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tracing::instrument;
 
 use crate::models::{CCTXResponse, CrossChainTx, InboundHashToCctxResponse, PagedCCTXResponse};
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RpcSettings {
     pub url: String,

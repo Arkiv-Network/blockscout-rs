@@ -46,15 +46,14 @@ impl ZetachainCctxDatabase {
 
     pub async fn mark_watermark_as_failed(
         &self,
-        watermark: watermark::Model,
-    ) -> anyhow::Result<()> {
+        watermark_id: i32)
+     -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
-            id: ActiveValue::Set(watermark.id),
+            id: ActiveValue::Set(watermark_id),
             processing_status: ActiveValue::Set(ProcessingStatus::Failed),
-            retries_number: ActiveValue::Set(watermark.retries_number + 1),
             ..Default::default()
         })
-        .filter(watermark::Column::Id.eq(watermark.id))
+        .filter(watermark::Column::Id.eq(watermark_id))
         .exec(self.db.as_ref())
         .await?;
         Ok(())
@@ -317,21 +316,30 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(skip(self,tx,watermark),level="debug",fields(watermark_id = %watermark.id, new_pointer = %new_pointer))]
+    // pub async fn get_unlocked_watermarks(&self, kind: Kind) -> anyhow::Result<Vec<watermark::Model>> {
+    //     let watermarks = watermark::Entity::find()
+    //         .filter(watermark::Column::Kind.eq(kind))
+    //         .filter(watermark::Column::ProcessingStatus.eq(ProcessingStatus::Unlocked))
+    //         .all(self.db.as_ref())
+    //         .await?;
+    //     Ok(watermarks)
+    // }
+
+    #[instrument(skip(self,tx,watermark_id),level="debug",fields(watermark_id = %watermark_id, new_pointer = %new_pointer))]
     pub async fn move_watermark(
         &self,
-        watermark: watermark::Model,
+        watermark_id: i32,
         new_pointer: &str,
         tx: &DatabaseTransaction,
     ) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
-            id: ActiveValue::Set(watermark.id),
+            id: ActiveValue::Set(watermark_id),
             processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             pointer: ActiveValue::Set(new_pointer.to_owned()),
             updated_at: ActiveValue::Set(Utc::now().naive_utc()),
             ..Default::default()
         })
-        .filter(watermark::Column::Id.eq(watermark.id))
+        .filter(watermark::Column::Id.eq(watermark_id))
         .exec(tx)
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
@@ -380,7 +388,8 @@ impl ZetachainCctxDatabase {
         cctxs: Vec<CrossChainTx>,
         next_key: &str,
         realtime_threshold: i64,
-        watermark: watermark::Model,
+        watermark_id: i32,
+        watermark_pointer: String,
     ) -> anyhow::Result<(ProcessingStatus, String)> {
         let earliest_fetched = cctxs.last().unwrap();
         let latest_fetched = cctxs.first().unwrap();
@@ -394,7 +403,7 @@ impl ZetachainCctxDatabase {
             tracing::info!(
                 "earliest fetched cctx is too old, skipping and marking watermark as done"
             );
-            return Ok((ProcessingStatus::Done, watermark.pointer.clone()));
+            return Ok((ProcessingStatus::Done, watermark_pointer.clone()));
         }
         let latest_synced = self.query_cctx(latest_fetched.index.clone()).await?;
         if latest_synced.is_some() {
@@ -402,12 +411,12 @@ impl ZetachainCctxDatabase {
                 "last synced cctx {} is present, marking as done",
                 earliest_fetched.index
             );
-            return Ok((ProcessingStatus::Done, watermark.pointer));
+            return Ok((ProcessingStatus::Done, watermark_pointer));
         } else {
             tracing::debug!("last synced cctx is absent, inserting a batch and moving watermark");
             let tx = self.db.begin().await?;
             self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
-            self.move_watermark(watermark, next_key, &tx).await?;
+            self.move_watermark(watermark_id, next_key, &tx).await?;
             tx.commit().await?;
             return Ok((ProcessingStatus::Unlocked, next_key.to_owned()));
         }
@@ -415,17 +424,17 @@ impl ZetachainCctxDatabase {
 
     pub async fn update_watermark(
         &self,
-        watermark: watermark::Model,
+        watermark_id: i32,
         pointer: &str,
         status: ProcessingStatus,
     ) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
-            id: ActiveValue::Unchanged(watermark.id),
+            id: ActiveValue::Unchanged(watermark_id),
             processing_status: ActiveValue::Set(status),
             pointer: ActiveValue::Set(pointer.to_owned()),
             ..Default::default()
         })
-        .filter(watermark::Column::Id.eq(watermark.id))
+        .filter(watermark::Column::Id.eq(watermark_id))
         .exec(self.db.as_ref())
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
@@ -479,11 +488,11 @@ impl ZetachainCctxDatabase {
         job_id: Uuid,
         cctxs: Vec<CrossChainTx>,
         next_key: &str,
-        watermark: watermark::Model,
+        watermark_id: i32,
     ) -> anyhow::Result<()> {
         let tx = self.db.begin().await?;
         self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
-        self.update_watermark(watermark, next_key, ProcessingStatus::Unlocked)
+        self.update_watermark(watermark_id, next_key, ProcessingStatus::Unlocked)
             .await?;
         tx.commit().await?;
         Ok(())
@@ -801,20 +810,20 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="debug",skip(self,job_id,watermark), fields(watermark_id = %watermark.id))]
+    #[instrument(,level="debug",skip(self,job_id,watermark_id), fields(watermark_id = %watermark_id))]
     pub async fn unlock_watermark(
         &self,
-        watermark: watermark::Model,
+        watermark_id: i32,
         job_id: Uuid,
     ) -> anyhow::Result<()> {
         let res = watermark::Entity::update(watermark::ActiveModel {
-            id: ActiveValue::Unchanged(watermark.id),
+            id: ActiveValue::Unchanged(watermark_id),
             processing_status: ActiveValue::Set(ProcessingStatus::Unlocked),
             updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
             updated_by: ActiveValue::Set(job_id.to_string()),
             ..Default::default()
         })
-        .filter(watermark::Column::Id.eq(watermark.id))
+        .filter(watermark::Column::Id.eq(watermark_id))
         .exec(self.db.as_ref())
         .await?;
 
@@ -825,34 +834,34 @@ impl ZetachainCctxDatabase {
     #[instrument(,level="debug",skip_all)]
     pub async fn lock_watermark(
         &self,
-        watermark: watermark::Model,
+        watermark_id: i32,
         job_id: Uuid,
     ) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
-            id: ActiveValue::Unchanged(watermark.id),
+            id: ActiveValue::Unchanged(watermark_id),
             processing_status: ActiveValue::Set(ProcessingStatus::Locked),
             updated_by: ActiveValue::Set(job_id.to_string()),
             updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
             ..Default::default()
         })
-        .filter(watermark::Column::Id.eq(watermark.id))
+        .filter(watermark::Column::Id.eq(watermark_id))
         .exec(self.db.as_ref())
         .await?;
         Ok(())
     }
 
-    #[instrument(,level="debug",skip(self),fields(watermark_id = %watermark.id,job_id = %job_id))]
+    #[instrument(,level="debug",skip(self),fields(watermark_id = %watermark_id,job_id = %job_id))]
     pub async fn mark_watermark_as_done(
         &self,
-        watermark: watermark::Model,
+        watermark_id: i32,
         job_id: Uuid,
     ) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
-            id: ActiveValue::Unchanged(watermark.id),
+            id: ActiveValue::Unchanged(watermark_id),
             processing_status: ActiveValue::Set(ProcessingStatus::Done),
             ..Default::default()
         })
-        .filter(watermark::Column::Id.eq(watermark.id))
+        .filter(watermark::Column::Id.eq(watermark_id))
         .exec(self.db.as_ref())
         .await?;
         Ok(())
@@ -912,6 +921,36 @@ impl ZetachainCctxDatabase {
             .collect::<Result<Vec<CctxShort>, sea_orm::DbErr>>();
 
         cctxs.map_err(|e| anyhow::anyhow!(e))
+    }
+
+
+
+    #[instrument(,level="debug",skip_all)]
+    pub async fn get_unlocked_watermarks(&self, kind: Kind) -> anyhow::Result<Vec<(i32,String,i32)>> {
+
+        let query_statement = format!(
+            r#"
+            WITH unlocked_watermarks AS (
+                SELECT * FROM watermark WHERE kind::text = '{kind}' AND processing_status = 'unlocked'
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE watermark
+            SET processing_status = 'locked' ,updated_at = NOW()
+            WHERE id IN (SELECT id FROM unlocked_watermarks)
+            RETURNING id, pointer, retries_number
+            "#
+        );
+        let query_statement = Statement::from_sql_and_values(DbBackend::Postgres, query_statement, vec![]);
+
+        let watermarks: Result<Vec<(i32,String,i32)>, sea_orm::DbErr> = self
+            .db
+            .query_all(query_statement)
+            .await?
+            .iter()
+            .map(|r| std::result::Result::Ok((r.try_get_by_index(0)?,r.try_get_by_index(1)?,r.try_get_by_index(2)?)))
+            .collect::<Result<Vec<(i32,String,i32)>, sea_orm::DbErr>>();
+
+        watermarks.map_err(|e| anyhow::anyhow!(e))
     }
 
     #[instrument(,level="debug",skip(self), fields(batch_id = %batch_id))]

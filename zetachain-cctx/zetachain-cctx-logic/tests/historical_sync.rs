@@ -142,7 +142,6 @@ async fn test_historical_sync_updates_pointer() {
             enabled: true,
             ..Default::default()
         },
-        db_conn.clone(),
         Arc::new(client),
         Arc::new(ZetachainCctxDatabase::new(db_conn.clone())),
     );

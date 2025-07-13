@@ -148,7 +148,6 @@ async fn test_level_data_gap() {
             enabled: true,
             ..Default::default()
         },
-        db.client().clone(),
         Arc::new(rpc_client),
         Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
     );

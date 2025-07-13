@@ -50,4 +50,6 @@ migrate-up:
 migrate-down:
     sea-orm-cli migrate -d zetachain-cctx-migration down
 
-
+# justfile
+check-envs:
+    cargo run --bin check-envs

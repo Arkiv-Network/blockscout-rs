@@ -1,8 +1,8 @@
 use std::thread;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IndexerSettings {
    pub enabled: bool,

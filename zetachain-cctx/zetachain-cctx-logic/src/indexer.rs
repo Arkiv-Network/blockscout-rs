@@ -10,14 +10,10 @@ use uuid::Uuid;
 use crate::database::ZetachainCctxDatabase;
 use crate::models::{CctxShort, PagedCCTXResponse};
 use zetachain_cctx_entity::sea_orm_active_enums::{Kind, ProcessingStatus};
-use zetachain_cctx_entity::watermark;
-
-use sea_orm::ColumnTrait;
 use std::result::Result::Ok as ResultOk;
 use std::result::Result::Err as ResultErr;
 use crate::{client::Client, settings::IndexerSettings};
 use futures::StreamExt;
-use sea_orm::{ActiveValue, DatabaseConnection, EntityTrait, QueryFilter};
 use tracing::instrument;
 
 use futures::stream::{select_with_strategy, PollNext};
@@ -26,15 +22,14 @@ use futures::stream::{select_with_strategy, PollNext};
 
 pub struct Indexer {
     pub settings: IndexerSettings,
-    pub db: Arc<DatabaseConnection>,
     pub client: Arc<Client>,
     pub database: Arc<ZetachainCctxDatabase>,
 }
 
 enum IndexerJob {
     StatusUpdate(CctxShort, Uuid),             //cctx index and id to be updated
-    LevelDataGap(watermark::Model, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
-    HistoricalDataFetch(watermark::Model, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
+    LevelDataGap(i32,String, i32, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
+    HistoricalDataFetch(i32,String, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
 }
 
 #[instrument(,level="debug",skip_all)]
@@ -48,40 +43,42 @@ async fn refresh_cctx_status(
     Ok(())
 }
 
-#[instrument(,level="info",skip(database, client,watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
+#[instrument(,level="info",skip_all, fields(job_id = %job_id, watermark_id = %watermark_id, watermark_pointer = %watermark_pointer))]
 async fn level_data_gap(
     job_id: Uuid,
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
-    watermark: watermark::Model,
+    watermark_id: i32,
+    watermark_pointer: String,
     batch_size: u32,
     realtime_threshold: i64,
 ) -> anyhow::Result<(ProcessingStatus,String)> {
     let PagedCCTXResponse { cross_chain_tx : cctxs, pagination } = client
-    .list_cctxs(Some(&watermark.pointer), false, batch_size)
+    .list_cctxs(Some(&watermark_pointer), false, batch_size)
     .await?;
     
     if cctxs.is_empty() {
         tracing::debug!("No recent cctxs found");
-        return Ok((ProcessingStatus::Done,watermark.pointer));
+        return Ok((ProcessingStatus::Done,watermark_pointer));
     }
     
     let next_key = pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
-    let res = database.import_missing_cctxs(job_id, cctxs, &next_key, realtime_threshold, watermark).await?;
+    let res = database.import_missing_cctxs(job_id, cctxs, &next_key, realtime_threshold, watermark_id, watermark_pointer).await?;
     tracing::debug!(" process_realtime_cctxs indexer import_missing_cctxs result: {:?}", res);
     Ok(res)
 }
 
-#[instrument(,level="info",skip(database, client, watermark), fields(job_id = %job_id, watermark = %watermark.pointer))]
+#[instrument(,level="info",skip_all, fields(job_id = %job_id, watermark_id = %watermark_id, watermark_pointer = %watermark_pointer))]
 async fn historical_sync(
     database: Arc<ZetachainCctxDatabase>,
     client: &Client,
-    watermark: watermark::Model,
+    watermark_id: i32,
+    watermark_pointer: &str,
     job_id: Uuid,
     batch_size: u32,
 ) -> anyhow::Result<()> {
     let response = client
-        .list_cctxs(Some(&watermark.pointer), true, batch_size)
+        .list_cctxs(Some(&watermark_pointer), true, batch_size)
         .await?;
     let cross_chain_txs = response.cross_chain_tx;
     if cross_chain_txs.is_empty() {
@@ -89,7 +86,7 @@ async fn historical_sync(
     }
     let next_key = response.pagination.next_key.ok_or(anyhow::anyhow!("next_key is None"))?;
     //atomically insert cctxs and update watermark    
-    database.import_cctxs(job_id, cross_chain_txs, &next_key, watermark).await?;
+    database.import_cctxs(job_id, cross_chain_txs, &next_key, watermark_id).await?;
     Ok(())
 }
 
@@ -156,13 +153,11 @@ fn prio_left(_: &mut ()) -> PollNext {
 impl Indexer {
     pub fn new(
         settings: IndexerSettings,
-        db: Arc<DatabaseConnection>,
         client: Arc<Client>,
         database: Arc<ZetachainCctxDatabase>,
     ) -> Self {
         Self {
             settings,
-            db,
             client,
             database,
         }
@@ -187,21 +182,7 @@ impl Indexer {
         })
     }
 
-    #[instrument(,level="debug",skip(self,db))]
-    async fn acquire_historical_watermark(&self,db: &DatabaseConnection, job_id: Uuid) -> anyhow::Result<watermark::Model> {
-        
-        let historical_watermark = watermark::Entity::find()
-            .filter(watermark::Column::Kind.eq(Kind::Historical))
-            .filter(watermark::Column::ProcessingStatus.eq(ProcessingStatus::Unlocked))
-            .one(db)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("historical watermark is absent or locked"))?;
 
-        self.database.lock_watermark(historical_watermark.clone(),job_id).await?;
-
-        tracing::debug!("acquired historical watermark: {}", historical_watermark.id);
-        Ok(historical_watermark)
-    }
 
     #[instrument(,level="debug",skip(self))]
     pub async fn run(&self)-> anyhow::Result<()> {
@@ -236,33 +217,19 @@ impl Indexer {
         }
         );
 
-        let db = self.db.clone();
         // checks whether the realtme fetcher hasn't actually fetched all the data in a single request, so we might be lagging behind
         let level_data_gap_stream = Box::pin(async_stream::stream! {
             loop {
-
-                let watermarks = watermark::Entity::find()
-                    .filter(watermark::Column::Kind.eq(Kind::Realtime))
-                    .filter(watermark::Column::ProcessingStatus.eq(ProcessingStatus::Unlocked))
-                    .all(db.as_ref())
-                    .await
-                    .unwrap();
-
-                for watermark in watermarks {
-                    //update watermark lock to true
-                    watermark::Entity::update(watermark::ActiveModel {
-                        id: ActiveValue::Set(watermark.id),
-                        processing_status: ActiveValue::Set(ProcessingStatus::Locked),
-                        ..Default::default()
-                    })
-                    .filter(watermark::Column::Id.eq(watermark.id))
-                    .exec(db.as_ref())
-                    .await
-                    .unwrap();
-
-                    yield IndexerJob::LevelDataGap(watermark, Uuid::new_v4());
+                match self.database.get_unlocked_watermarks(Kind::Realtime).await {
+                    std::result::Result::Ok(watermarks) => {
+                        for (id,pointer,retries_number) in watermarks.into_iter() {
+                            yield IndexerJob::LevelDataGap(id,pointer, retries_number, Uuid::new_v4());
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to get unlocked watermarks");
+                    }
                 }
-
                 tokio::time::sleep(Duration::from_millis(self.settings.polling_interval)).await;
             }
         });
@@ -270,9 +237,12 @@ impl Indexer {
         let historical_stream = Box::pin(async_stream::stream! {
             loop {
                 let job_id = Uuid::new_v4();
-                match self.acquire_historical_watermark(&self.db, job_id).await {
-                    std::result::Result::Ok(watermark) => {
-                        yield IndexerJob::HistoricalDataFetch(watermark, job_id);
+                match self.database.get_unlocked_watermarks(Kind::Historical).await {
+                    std::result::Result::Ok(watermarks) => {
+                        if let Some((id,pointer,_)) = watermarks.first() {
+                            tracing::debug!("job_id: {} acquired historical watermark: {}", job_id, pointer);
+                            yield IndexerJob::HistoricalDataFetch(*id,pointer.clone(), job_id);
+                        }
                     }
                     Err(e) => {
                         tracing::debug!("job_id: {} failed to acquire historical watermark: {}", job_id, e);
@@ -336,27 +306,27 @@ impl Indexer {
                                 }
                             }
                         }
-                        IndexerJob::LevelDataGap(watermark, job_id) => {
+                        IndexerJob::LevelDataGap(id,pointer, retries_number, job_id) => {
                            
-                            match level_data_gap(job_id, database.clone(), &client, watermark.clone(), level_data_gap_batch_size, realtime_threshold)  
+                            match level_data_gap(job_id, database.clone(), &client, id, pointer, level_data_gap_batch_size, realtime_threshold)  
                              .await {
-                             ResultOk((ProcessingStatus::Done,_)) =>  database.mark_watermark_as_done(watermark,job_id).await.unwrap(),
+                             ResultOk((ProcessingStatus::Done,_)) =>  database.mark_watermark_as_done(id,job_id).await.unwrap(),
                              ResultErr(e) => {
                                  tracing::warn!(error = %e, job_id = %job_id, "Failed to level data gap");
-                                 if watermark.retries_number < retry_threshold as i32 {
-                                    database.unlock_watermark(watermark,job_id).await.unwrap();
+                                 if retries_number < retry_threshold as i32 {
+                                    database.unlock_watermark(id,job_id).await.unwrap();
                                  } else {
-                                    database.mark_watermark_as_failed(watermark).await.unwrap();
+                                    database.mark_watermark_as_failed(id).await.unwrap();
                                  }
                              }
                              _ => {}
                          }
                         }   
                         
-                        IndexerJob::HistoricalDataFetch(watermark, job_id) => { 
-                            if let Err(e) = historical_sync(database.clone(), &client, watermark.clone(), job_id, historical_batch_size).await {
-                                tracing::warn!(error = %e, job_id = %job_id, watermark = %watermark.pointer, "Failed to sync historical data");
-                                database.unlock_watermark(watermark,job_id).await.unwrap();
+                        IndexerJob::HistoricalDataFetch(id,pointer, job_id) => { 
+                            if let Err(e) = historical_sync(database.clone(), &client, id, &pointer, job_id, historical_batch_size).await {
+                                tracing::warn!(error = %e, job_id = %job_id, watermark_id = %id, watermark_pointer = %pointer, "Failed to sync historical data");
+                                database.unlock_watermark(id,job_id).await.unwrap();
                             }
                         }
                     }

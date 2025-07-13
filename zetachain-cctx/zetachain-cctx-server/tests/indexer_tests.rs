@@ -3,9 +3,7 @@ use std::time::Duration;
 mod helpers;
 
 use blockscout_service_launcher::test_server;
-use chrono::{NaiveDateTime, Utc};
 use pretty_assertions::assert_eq;
-use sea_orm::ConnectionTrait;
 use sea_orm::TransactionTrait;
 use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::json;
@@ -21,9 +19,6 @@ use zetachain_cctx_entity::sea_orm_active_enums::{
     CoinType, ProcessingStatus, ProtocolContractVersion,
 };
 use zetachain_cctx_entity::{cross_chain_tx, sea_orm_active_enums::Kind, watermark};
-use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::CctxStatus as ProtoCctxStatus;
-use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::CoinType as ProtoCoinType;
-use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::Status;
 
 use crate::helpers::{
     dummy_cctx_with_pagination_response, dummy_cross_chain_tx, dummy_related_cctxs_response,
@@ -134,7 +129,6 @@ async fn test_status_update() {
             enabled: true,
             ..Default::default()
         },
-        db.client().clone(),
         Arc::new(client),
         Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
     );
@@ -290,7 +284,6 @@ async fn test_status_update_links_related() {
             enabled: true,
             ..Default::default()
         },
-        db.client().clone(),
         Arc::new(client),
         Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
     );
@@ -404,12 +397,13 @@ async fn test_lock_watermark() {
         .one(db.client().as_ref())
         .await
         .unwrap();
+    let watermark_id = watermark.clone().unwrap().id;
     database
-        .lock_watermark(watermark.clone().unwrap(), Uuid::new_v4())
+        .lock_watermark(watermark_id, Uuid::new_v4())
         .await
         .unwrap();
     database
-        .unlock_watermark(watermark.clone().unwrap(), Uuid::new_v4())
+        .unlock_watermark(watermark_id, Uuid::new_v4())
         .await
         .unwrap();
 

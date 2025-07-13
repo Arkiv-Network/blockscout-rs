@@ -3,8 +3,18 @@ name = "zetachain-cctx-server"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "zetachain-cctx-server"
+path = "src/main.rs"
+
+
+[[bin]]
+name = "check-envs"
+path = "src/check-envs.rs"
+
 
 [dependencies]
+env-collector = { git = "https://github.com/blockscout/blockscout-rs", rev = "26eed65" }
 zetachain-cctx-proto = { path = "../zetachain-cctx-proto" }
 zetachain-cctx-logic = { path = "../zetachain-cctx-logic" }
 zetachain-cctx-migration = { path = "../zetachain-cctx-migration" }

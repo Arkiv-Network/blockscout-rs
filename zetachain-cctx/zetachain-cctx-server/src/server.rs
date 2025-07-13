@@ -49,7 +49,7 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
     let cctx = Arc::new(CctxService::new(database.clone()));
     
     if settings.indexer.enabled {
-        let indexer = Indexer::new(settings.indexer, db, client, database);
+        let indexer = Indexer::new(settings.indexer,  client, database);
         tokio::spawn(async move {
             //TODO: handle error, log it and restart the indexer
             let _ = indexer.run().await;
