@@ -4,7 +4,7 @@ use crate::models::{
     self, CctxListItem, CctxShort, CompleteCctx, CrossChainTx, RelatedCctx, RelatedOutboundParams,
 };
 use anyhow::Ok;
-use chrono::{NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use sea_orm::ConnectionTrait;
 use sea_orm::{
     ActiveValue, DatabaseConnection, DatabaseTransaction, DbBackend, Statement, TransactionTrait,
@@ -422,16 +422,19 @@ impl ZetachainCctxDatabase {
         &self,
         watermark_id: i32,
         pointer: &str,
+        upper_bound_timestamp: Option<NaiveDateTime>,
         status: ProcessingStatus,
+        tx: &DatabaseTransaction,
     ) -> anyhow::Result<()> {
         watermark::Entity::update(watermark::ActiveModel {
             id: ActiveValue::Unchanged(watermark_id),
             processing_status: ActiveValue::Set(status),
             pointer: ActiveValue::Set(pointer.to_owned()),
+            upper_bound_timestamp: ActiveValue::Set(upper_bound_timestamp),
             ..Default::default()
         })
         .filter(watermark::Column::Id.eq(watermark_id))
-        .exec(self.db.as_ref())
+        .exec(tx)
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
         Ok(())
@@ -487,9 +490,11 @@ impl ZetachainCctxDatabase {
         watermark_id: i32,
     ) -> anyhow::Result<()> {
         let tx = self.db.begin().await?;
+        let upper_bound_timestamp = cctxs.last().unwrap().cctx_status.last_update_timestamp.parse::<i64>().unwrap_or(0);
+        let upper_bound_timestamp = DateTime::<Utc>::from_timestamp(upper_bound_timestamp, 0).unwrap().naive_utc();
         self.batch_insert_transactions(job_id, &cctxs, &tx).await?;
-        self.update_watermark(watermark_id, next_key, ProcessingStatus::Unlocked)
-            .await?;
+        self.update_watermark(watermark_id, next_key, Some(upper_bound_timestamp), ProcessingStatus::Unlocked, &tx)
+            .await?;    
         tx.commit().await?;
         Ok(())
     }

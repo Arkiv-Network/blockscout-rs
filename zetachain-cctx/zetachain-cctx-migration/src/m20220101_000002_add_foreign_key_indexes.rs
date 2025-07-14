@@ -99,15 +99,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Remove the hash index
-        manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_outbound_params_hash")
-                    .table(OutboundParams::Table)
-                    .to_owned(),
-            )
-            .await?;
 
         // Remove foreign key indexes
         manager
@@ -155,17 +146,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Recreate the original unique constraint on hash
-        manager
-            .create_index(
-                Index::create()
-                    .name("outbound_params_hash_key")
-                    .table(OutboundParams::Table)
-                    .col(OutboundParams::Hash)
-                    .unique()
-                    .to_owned(),
-            )
-            .await?;
 
         Ok(())
     }

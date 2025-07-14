@@ -22,6 +22,7 @@ use zetachain_cctx_logic::client::{Client, RpcSettings};
 use zetachain_cctx_logic::database::ZetachainCctxDatabase;
 use zetachain_cctx_logic::indexer::Indexer;
 use zetachain_cctx_logic::settings::IndexerSettings;
+use zetachain_cctx_entity::cctx_status;
 #[tokio::test]
 async fn test_historical_sync_updates_pointer() {
     //if env var TRACING=true then call init_tests_logs()
@@ -228,4 +229,19 @@ async fn test_historical_sync_updates_pointer() {
             .unwrap();
         assert!(revert.is_some());
     }
+
+
+    let (_, status) = cross_chain_tx::Entity::find()
+    .find_also_related(cctx_status::Entity)
+    .filter(cross_chain_tx::Column::Index.eq("page_3_index_2"))
+    .one(db_conn.as_ref())
+    .await.unwrap().unwrap();
+
+    let status = status.unwrap();
+
+    let watermark_timestamp = final_watermark.upper_bound_timestamp.unwrap();
+
+    assert_eq!(status.last_update_timestamp, watermark_timestamp);
+
+
 }

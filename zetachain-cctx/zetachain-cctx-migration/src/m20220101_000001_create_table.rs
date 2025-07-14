@@ -85,7 +85,13 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(0),
                     )
+                    .col(
+                        ColumnDef::new(Watermark::UpperBoundTimestamp)
+                            .date_time()
+                            .null()
+                    )
                     .to_owned(),    
+                    
             )
             .await?;
         // Create cross_chain_txs table
@@ -541,6 +547,7 @@ enum Watermark {
     UpdatedAt,
     UpdatedBy,
     RetriesNumber,
+    UpperBoundTimestamp,
 }
 /// Learn more at https://docs.rs/sea-query#iden
 #[derive(Iden)]

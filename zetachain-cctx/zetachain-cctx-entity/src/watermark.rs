@@ -16,6 +16,7 @@ pub struct Model {
     pub updated_at: DateTime,
     pub updated_by: String,
     pub retries_number: i32,
+    pub upper_bound_timestamp: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
