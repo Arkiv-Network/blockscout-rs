@@ -1,7 +1,6 @@
-version: '3.8'
-
 services:
   app:
+    container_name: zetachain-cctx-app
     image: zetachain-cctx-server:latest
     platform: linux/amd64
     ports:
@@ -14,6 +13,7 @@ services:
       - ./config:/app/config
 
   database:
+    container_name: zetachain-cctx-database
     image: postgres:15
     environment:
       - POSTGRES_USER=postgres
