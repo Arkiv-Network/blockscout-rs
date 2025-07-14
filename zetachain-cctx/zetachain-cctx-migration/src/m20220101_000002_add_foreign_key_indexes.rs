@@ -6,7 +6,44 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Add index for InboundParams::CrossChainTxId
+
+        // Create a composite unique index for outbound_params
+        // This ensures each combination of (cross_chain_tx_id, receiver, receiver_chain_id) is unique
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_outbound_params_composite_unique")
+                    .table(OutboundParams::Table)
+                    .col(OutboundParams::CrossChainTxId)
+                    .col(OutboundParams::Receiver)
+                    .col(OutboundParams::ReceiverChainId)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        // Create index on hash for fast lookups (but not unique since it can be null/empty)
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_outbound_params_hash")
+                    .table(OutboundParams::Table)
+                    .col(OutboundParams::Hash)
+                    .to_owned(),
+            )
+            .await?;
+
+        // Add foreign key indexes for better performance
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_cctx_status_cross_chain_tx_id")
+                    .table(CctxStatus::Table)
+                    .col(CctxStatus::CrossChainTxId)
+                    .to_owned(),
+            )
+            .await?;
+
         manager
             .create_index(
                 Index::create()
@@ -17,7 +54,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Add index for OutboundParams::CrossChainTxId
         manager
             .create_index(
                 Index::create()
@@ -28,7 +64,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Add index for RevertOptions::CrossChainTxId
         manager
             .create_index(
                 Index::create()
@@ -39,14 +74,13 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Add composite index for status + created_timestamp for better list_cctxs performance
+        // Add index on cross_chain_tx index field for faster lookups
         manager
             .create_index(
                 Index::create()
-                    .name("idx_cctx_status_status_created_timestamp")
-                    .table(CctxStatus::Table)
-                    .col(CctxStatus::Status)
-                    .col(CctxStatus::CreatedTimestamp)
+                    .name("idx_cross_chain_tx_index")
+                    .table(CrossChainTx::Table)
+                    .col(CrossChainTx::Index)
                     .to_owned(),
             )
             .await?;
@@ -55,7 +89,36 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Drop index for InboundParams::CrossChainTxId
+        // Remove the composite unique index
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_outbound_params_composite_unique")
+                    .table(OutboundParams::Table)
+                    .to_owned(),
+            )
+            .await?;
+
+        // Remove the hash index
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_outbound_params_hash")
+                    .table(OutboundParams::Table)
+                    .to_owned(),
+            )
+            .await?;
+
+        // Remove foreign key indexes
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_cctx_status_cross_chain_tx_id")
+                    .table(CctxStatus::Table)
+                    .to_owned(),
+            )
+            .await?;
+
         manager
             .drop_index(
                 Index::drop()
@@ -65,7 +128,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Drop index for OutboundParams::CrossChainTxId
         manager
             .drop_index(
                 Index::drop()
@@ -75,7 +137,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Drop index for RevertOptions::CrossChainTxId
         manager
             .drop_index(
                 Index::drop()
@@ -85,18 +146,35 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Drop composite index for status + created_timestamp
         manager
             .drop_index(
                 Index::drop()
-                    .name("idx_cctx_status_status_created_timestamp")
-                    .table(CctxStatus::Table)
+                    .name("idx_cross_chain_tx_index")
+                    .table(CrossChainTx::Table)
+                    .to_owned(),
+            )
+            .await?;
+
+        // Recreate the original unique constraint on hash
+        manager
+            .create_index(
+                Index::create()
+                    .name("outbound_params_hash_key")
+                    .table(OutboundParams::Table)
+                    .col(OutboundParams::Hash)
+                    .unique()
                     .to_owned(),
             )
             .await?;
 
         Ok(())
     }
+}
+
+#[derive(Iden)]
+enum CctxStatus {
+    Table,
+    CrossChainTxId,
 }
 
 #[derive(Iden)]
@@ -109,6 +187,9 @@ enum InboundParams {
 enum OutboundParams {
     Table,
     CrossChainTxId,
+    Receiver,
+    ReceiverChainId,
+    Hash,
 }
 
 #[derive(Iden)]
@@ -118,8 +199,7 @@ enum RevertOptions {
 }
 
 #[derive(Iden)]
-enum CctxStatus {
+enum CrossChainTx {
     Table,
-    Status,
-    CreatedTimestamp,
+    Index,
 } 

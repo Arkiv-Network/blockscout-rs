@@ -104,7 +104,7 @@ impl CctxInfoService for CctxService {
                     gas_limit: o.gas_limit.parse().unwrap_or(0),
                     gas_price: o.gas_price.unwrap_or_default(),
                     gas_priority_fee: o.gas_priority_fee.unwrap_or_default(),
-                    hash: o.hash,
+                    hash: o.hash.unwrap_or_default(),
                     ballot_index: o.ballot_index.unwrap_or_default(),
                     observed_external_height: o.observed_external_height.parse().unwrap_or(0),
                     gas_used: o.gas_used.parse().unwrap_or(0),

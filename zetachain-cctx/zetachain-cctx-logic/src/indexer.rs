@@ -239,7 +239,6 @@ impl Indexer {
                 let job_id = Uuid::new_v4();
                 match self.database.get_unlocked_watermarks(Kind::Historical).instrument(tracing::info_span!("historical_stream", job_id = %job_id)).await {
                     std::result::Result::Ok(watermarks) => {
-                        tracing::debug!(" historical_streamjob_id: {} acquired historical watermarks: {:?}", job_id, watermarks);
                         if let Some((id,pointer,_)) = watermarks.first() {
                             tracing::debug!(" historical_stream job_id: {} acquired historical watermark: {}", job_id, pointer);
                             yield IndexerJob::HistoricalDataFetch(*id,pointer.clone(), job_id);

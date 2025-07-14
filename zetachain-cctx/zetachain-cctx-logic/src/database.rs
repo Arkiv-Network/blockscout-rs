@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::models::{
@@ -43,7 +42,7 @@ impl ZetachainCctxDatabase {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self { db }
     }
-
+    #[instrument(level = "debug", skip_all)]
     pub async fn mark_watermark_as_failed(
         &self,
         watermark_id: i32)
@@ -81,6 +80,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn find_outdated_children_by_index(
         &self,
         fetched_cctxs: Vec<models::CrossChainTx>,
@@ -112,7 +112,7 @@ impl ZetachainCctxDatabase {
         Ok((need_to_import, need_to_update_ids))
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn get_cctx_ids_by_parent_id(
         &self,
         parent_ids: Vec<i32>,
@@ -155,7 +155,7 @@ impl ZetachainCctxDatabase {
             .await?;
         Ok(())
     }
-    #[instrument(level = "debug", skip_all,fields(child_index = %child_index, child_id = %child_id, root_id = %root_id, parent_id = %parent_id, depth = %depth))]
+    #[instrument(level = "trace", skip_all,fields(child_index = %child_index, child_id = %child_id, root_id = %root_id, parent_id = %parent_id, depth = %depth))]
     pub async fn update_single_related_cctx(
         &self,
         child_index: &str,
@@ -179,7 +179,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn traverse_and_update_tree_relationships(
         &self,
         children_cctxs: Vec<CrossChainTx>,
@@ -192,11 +192,6 @@ impl ZetachainCctxDatabase {
         let (need_to_import, need_to_update_ids) = self
             .find_outdated_children_by_index(children_cctxs, cctx.id, root_id, &tx)
             .await?;
-        tracing::debug!(
-            "need_to_import: {:?}, need_to_update_ids: {:?}",
-            need_to_import,
-            need_to_update_ids
-        );
 
         for new_cctx in need_to_import {
             self.import_related_cctx(new_cctx, job_id, root_id, cctx.id, cctx.depth + 1, &tx)
@@ -441,7 +436,7 @@ impl ZetachainCctxDatabase {
         .map_err(|e| anyhow::anyhow!(e))?;
         Ok(())
     }
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "info", skip_all)]
     pub async fn process_realtime_cctxs(
         &self,
         job_id: Uuid,
@@ -563,7 +558,7 @@ impl ZetachainCctxDatabase {
                 )
             })?;
 
-        tracing::debug!("job_id: {}, inserted cctxs: {}", job_id, indices.join(","));
+        tracing::info!("job_id: {}, inserted cctxs: {}", job_id, indices.join(","));
         // Create a map from index to id for quick lookup
         let index_to_id: std::collections::HashMap<String, i32> = inserted_cctxs
             .into_iter()
@@ -666,7 +661,7 @@ impl ZetachainCctxDatabase {
                         gas_limit: ActiveValue::Set(outbound.gas_limit.clone()),
                         gas_price: ActiveValue::Set(Some(outbound.gas_price.clone())),
                         gas_priority_fee: ActiveValue::Set(Some(outbound.gas_priority_fee.clone())),
-                        hash: ActiveValue::Set(outbound.hash.clone()),
+                        hash: ActiveValue::Set(if outbound.hash.is_empty() { None } else { Some(outbound.hash.clone()) }),
                         ballot_index: ActiveValue::Set(Some(outbound.ballot_index.clone())),
                         observed_external_height: ActiveValue::Set(
                             outbound.observed_external_height.clone(),
@@ -753,34 +748,25 @@ impl ZetachainCctxDatabase {
                 .map_err(|e| anyhow::anyhow!("Batch insert inbound_params failed: {}", e))?;
         }
         if !outbound_models.is_empty() {
-            let hash_set = outbound_models
-                .iter()
-                .map(|outbound| outbound.hash.as_ref().clone())
-                .collect::<HashSet<String>>();
-            if hash_set.len() != outbound_models.len() {
-                tracing::error!(
-                    "Batch insert outbound_params failed: duplicate hashes job_id: {} indices: {}",
-                    job_id,
-                    indices.join(",")
-                );
-                return Err(anyhow::anyhow!(
-                    "Batch insert outbound_params failed: duplicate hashes"
-                ));
-            }
             OutboundParamsEntity::Entity::insert_many(outbound_models)
                 .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(OutboundParamsEntity::Column::Hash)
-                        .update_columns([
-                            OutboundParamsEntity::Column::TxFinalizationStatus,
-                            OutboundParamsEntity::Column::GasUsed,
-                            OutboundParamsEntity::Column::EffectiveGasPrice,
-                            OutboundParamsEntity::Column::EffectiveGasLimit,
-                            OutboundParamsEntity::Column::TssNonce,
-                            OutboundParamsEntity::Column::CallOptionsGasLimit,
-                            OutboundParamsEntity::Column::CallOptionsIsArbitraryCall,
-                            OutboundParamsEntity::Column::ConfirmationMode,
-                        ])
-                        .to_owned(),
+                    sea_orm::sea_query::OnConflict::columns([
+                        OutboundParamsEntity::Column::CrossChainTxId,
+                        OutboundParamsEntity::Column::Receiver,
+                        OutboundParamsEntity::Column::ReceiverChainId,
+                    ])
+                    .update_columns([
+                        OutboundParamsEntity::Column::Hash,
+                        OutboundParamsEntity::Column::TxFinalizationStatus,
+                        OutboundParamsEntity::Column::GasUsed,
+                        OutboundParamsEntity::Column::EffectiveGasPrice,
+                        OutboundParamsEntity::Column::EffectiveGasLimit,
+                        OutboundParamsEntity::Column::TssNonce,
+                        OutboundParamsEntity::Column::CallOptionsGasLimit,
+                        OutboundParamsEntity::Column::CallOptionsIsArbitraryCall,
+                        OutboundParamsEntity::Column::ConfirmationMode,
+                    ])
+                    .to_owned(),
                 )
                 .exec(tx)
                 .instrument(tracing::debug_span!("inserting outbound_params"))
@@ -811,7 +797,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="debug",skip(self,job_id,watermark_id), fields(watermark_id = %watermark_id))]
+    #[instrument(,level="trace",skip(self,job_id,watermark_id), fields(watermark_id = %watermark_id))]
     pub async fn unlock_watermark(
         &self,
         watermark_id: i32,
@@ -832,7 +818,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="debug",skip_all)]
+    #[instrument(,level="trace",skip_all)]
     pub async fn lock_watermark(
         &self,
         watermark_id: i32,
@@ -851,7 +837,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="debug",skip(self),fields(watermark_id = %watermark_id,job_id = %job_id))]
+    #[instrument(,level="trace",skip(self),fields(watermark_id = %watermark_id,job_id = %job_id))]
     pub async fn mark_watermark_as_done(
         &self,
         watermark_id: i32,
@@ -868,7 +854,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="debug",skip_all)]
+    #[instrument(,level="trace",skip_all)]
     pub async fn unlock_cctx(&self, id: i32, job_id: Uuid) -> anyhow::Result<()> {
         CrossChainTxEntity::Entity::update(CrossChainTxEntity::ActiveModel {
             id: ActiveValue::Unchanged(id),
@@ -883,7 +869,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="debug",skip(self),fields(batch_id = %batch_id))]
+    #[instrument(,level="trace",skip(self),fields(batch_id = %batch_id))]
     pub async fn query_failed_cctxs(&self, batch_id: Uuid) -> anyhow::Result<Vec<CctxShort>> {
         let statement = format!(
             r#"
@@ -926,21 +912,13 @@ impl ZetachainCctxDatabase {
 
 
 
-    #[instrument(,level="debug",skip_all)]
+    #[instrument(,level="trace",skip_all)]
     pub async fn get_unlocked_watermarks(&self, kind: Kind) -> anyhow::Result<Vec<(i32,String,i32)>> {
 
-        let debug_info = watermark::Entity::find()
-            .filter(watermark::Column::Kind.eq(kind.clone()))
-            .filter(watermark::Column::ProcessingStatus.eq(ProcessingStatus::Unlocked))
-            .all(self.db.as_ref())
-            .await?;
-        tracing::debug!("debug_info: {:?}", debug_info);
-
-        let kind_str = kind.to_string();
         let query_statement = format!(
             r#"
             WITH unlocked_watermarks AS (
-                SELECT * FROM watermark WHERE kind::text = '{kind_str}' AND processing_status::text = 'Unlocked'
+                SELECT * FROM watermark WHERE kind::text = '{kind}' AND processing_status::text = 'Unlocked'
                 FOR UPDATE SKIP LOCKED
             )
             UPDATE watermark
@@ -949,7 +927,7 @@ impl ZetachainCctxDatabase {
             RETURNING id, pointer, retries_number
             "#
         );
-        tracing::debug!("query_statement: {:?}", query_statement);
+
         let query_statement = Statement::from_sql_and_values(DbBackend::Postgres, query_statement, vec![]);
 
         let watermarks: Result<Vec<(i32,String,i32)>, sea_orm::DbErr> = self
@@ -963,7 +941,7 @@ impl ZetachainCctxDatabase {
         watermarks.map_err(|e| anyhow::anyhow!(e))
     }
 
-    #[instrument(,level="debug",skip(self), fields(batch_id = %batch_id))]
+    #[instrument(,level="trace",skip(self), fields(batch_id = %batch_id))]
     pub async fn query_cctxs_for_status_update(
         &self,
         batch_size: u32,
@@ -1010,7 +988,7 @@ impl ZetachainCctxDatabase {
         cctxs.map_err(|e| anyhow::anyhow!(e))
     }
 
-    #[instrument(,level="debug",skip(self,tx),fields(cctx_id = %cctx_id))]
+    #[instrument(,level="trace",skip(self,tx),fields(cctx_id = %cctx_id))]
     pub async fn mark_cctx_tree_processed(
         &self,
         cctx_id: i32,
@@ -1031,7 +1009,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="debug",skip(self,tx),fields(cctx_id = %cctx_id, job_id = %job_id))]
+    #[instrument(,level="trace",skip(self,tx),fields(cctx_id = %cctx_id, job_id = %job_id))]
     pub async fn update_last_status_update_timestamp(
         &self,
         cctx_id: i32,
@@ -1052,7 +1030,7 @@ impl ZetachainCctxDatabase {
         Ok(())
     }
 
-    #[instrument(,level="debug",skip_all)]
+    #[instrument(,level="trace",skip_all)]
     pub async fn update_cctx_status(
         &self,
         cctx_id: i32,
@@ -1108,7 +1086,6 @@ impl ZetachainCctxDatabase {
                 })
                 .filter(cctx_status::Column::Id.eq(cctx_status_row.id))
                 .exec(self.db.as_ref())
-                .instrument(tracing::debug_span!("updating cctx_status", new_status = %fetched_cctx.cctx_status.status))
                 .await?;
         }
 
@@ -1275,7 +1252,7 @@ impl ZetachainCctxDatabase {
                 gas_limit: ActiveValue::Set(outbound.gas_limit),
                 gas_price: ActiveValue::Set(Some(outbound.gas_price)),
                 gas_priority_fee: ActiveValue::Set(Some(outbound.gas_priority_fee)),
-                hash: ActiveValue::Set(outbound.hash),
+                hash: ActiveValue::Set(if outbound.hash.is_empty() { None } else { Some(outbound.hash) }),
                 ballot_index: ActiveValue::Set(Some(outbound.ballot_index)),
                 observed_external_height: ActiveValue::Set(outbound.observed_external_height),
                 gas_used: ActiveValue::Set(outbound.gas_used),
@@ -1299,9 +1276,23 @@ impl ZetachainCctxDatabase {
             };
             OutboundParamsEntity::Entity::insert(outbound_model)
                 .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(OutboundParamsEntity::Column::Hash)
-                        .do_nothing()
-                        .to_owned(),
+                    sea_orm::sea_query::OnConflict::columns([
+                        OutboundParamsEntity::Column::CrossChainTxId,
+                        OutboundParamsEntity::Column::Receiver,
+                        OutboundParamsEntity::Column::ReceiverChainId,
+                    ])
+                    .update_columns([
+                        OutboundParamsEntity::Column::Hash,
+                        OutboundParamsEntity::Column::TxFinalizationStatus,
+                        OutboundParamsEntity::Column::GasUsed,
+                        OutboundParamsEntity::Column::EffectiveGasPrice,
+                        OutboundParamsEntity::Column::EffectiveGasLimit,
+                        OutboundParamsEntity::Column::TssNonce,
+                        OutboundParamsEntity::Column::CallOptionsGasLimit,
+                        OutboundParamsEntity::Column::CallOptionsIsArbitraryCall,
+                        OutboundParamsEntity::Column::ConfirmationMode,
+                    ])
+                    .to_owned(),
                 )
                 .exec(tx)
                 .await

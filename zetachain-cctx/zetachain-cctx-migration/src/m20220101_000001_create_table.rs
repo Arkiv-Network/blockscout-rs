@@ -362,7 +362,7 @@ impl MigrationTrait for Migration {
                             .string()
                             .null(),
                     )
-                    .col(ColumnDef::new(OutboundParams::Hash).string().unique_key().not_null())
+                    .col(ColumnDef::new(OutboundParams::Hash).string().null())
                     .col(ColumnDef::new(OutboundParams::BallotIndex).string().null())
                     .col(
                         ColumnDef::new(OutboundParams::ObservedExternalHeight)

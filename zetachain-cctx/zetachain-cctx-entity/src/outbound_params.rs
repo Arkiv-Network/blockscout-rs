@@ -19,8 +19,7 @@ pub struct Model {
     pub gas_limit: String,
     pub gas_price: Option<String>,
     pub gas_priority_fee: Option<String>,
-    #[sea_orm(unique)]
-    pub hash: String,
+    pub hash: Option<String>,
     pub ballot_index: Option<String>,
     pub observed_external_height: String,
     pub gas_used: String,
