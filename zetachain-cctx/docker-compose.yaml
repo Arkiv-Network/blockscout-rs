@@ -13,7 +13,7 @@ services:
     volumes:
       - ./config:/app/config
 
-  postgres:
+  database:
     image: postgres:15
     environment:
       - POSTGRES_USER=postgres
