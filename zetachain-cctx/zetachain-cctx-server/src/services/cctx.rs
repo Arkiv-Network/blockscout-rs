@@ -4,7 +4,7 @@ use tonic::{Request, Response, Status};
 
 use zetachain_cctx_logic::database::{ZetachainCctxDatabase};
 use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::{
-    cctx_info_service_server::CctxInfoService, CallOptions, CctxListItem, CctxStatus, CoinType, CrossChainTx, GetCctxInfoRequest, InboundParams, ListCctxsRequest, ListCctxsResponse, OutboundParams, RelatedCctx, RelatedOutboundParams, RevertOptions, Status as CCTXStatus
+    cctx_info_server::CctxInfo, CallOptions, CctxListItem, CctxStatus, CoinType, CrossChainTx, GetCctxInfoRequest, InboundParams, ListCctxsRequest, ListCctxsResponse, OutboundParams, RelatedCctx, RelatedOutboundParams, RevertOptions, Status as CCTXStatus
 };
 
 
@@ -21,7 +21,7 @@ impl CctxService {
 }
 
 #[async_trait::async_trait]
-impl CctxInfoService for CctxService {
+impl CctxInfo for CctxService {
 
 
     async fn list_cctxs(&self, request: Request<ListCctxsRequest>) -> Result<Response<ListCctxsResponse>, Status> {

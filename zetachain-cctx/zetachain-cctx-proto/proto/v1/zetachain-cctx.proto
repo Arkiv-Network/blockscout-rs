@@ -5,7 +5,7 @@ package blockscout.zetachainCctx.v1;
 option go_package = "github.com/blockscout/blockscout-rs/zetachain-cctx";
 
 
-service CctxInfoService {
+service CctxInfo {
   rpc GetCctxInfo(GetCctxInfoRequest) returns (CrossChainTx) {}
   rpc ListCctxs(ListCctxsRequest) returns (ListCctxsResponse) {}
   

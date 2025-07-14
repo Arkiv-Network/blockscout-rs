@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::models::{
-    self, CctxListItem, CctxShort, CompleteCctx, CrossChainTx, RelatedCctx, RelatedOutboundParams,
+    self, CctxListItem, CctxShort, CompleteCctx, CrossChainTx, RelatedCctx, RelatedOutboundParams, SyncProgress,
 };
 use anyhow::Ok;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -22,6 +22,9 @@ use zetachain_cctx_entity::{
     },
     watermark,
 };
+
+use sea_orm::{QueryOrder, QuerySelect, QueryTrait};
+
 
 pub struct ZetachainCctxDatabase {
     db: Arc<DatabaseConnection>,
@@ -1320,6 +1323,41 @@ impl ZetachainCctxDatabase {
             .map_err(|e| anyhow::anyhow!("Failed to import related revert_options: {}", e))?;
 
         Ok(())
+    }
+
+    pub async fn get_sync_progress(&self) -> anyhow::Result<SyncProgress> {
+
+        let historical_watermark = watermark::Entity::find()
+            .filter(watermark::Column::Kind.eq(Kind::Historical))
+            .one(self.db.as_ref())
+            .await?
+            .ok_or(anyhow::anyhow!("Historical watermark not found"))?;
+
+        let historical_watermark_timestamp = historical_watermark.upper_bound_timestamp.expect("Historical watermark upper_bound_timestamp is not set");
+
+        let realtime_gaps = watermark::Entity::find()
+            .filter(watermark::Column::Kind.eq(Kind::Realtime))
+            .filter(watermark::Column::ProcessingStatus.ne(ProcessingStatus::Done))
+            .all(self.db.as_ref())
+            .await?;
+
+        let pending_cctxs_status_updates = CrossChainTxEntity::Entity::find()
+            .filter(CrossChainTxEntity::Column::ProcessingStatus.is_in(vec![ProcessingStatus::Locked,ProcessingStatus::Unlocked]))
+            .all(self.db.as_ref())
+            .await?;
+
+        let pending_cctxs = cctx_status::Entity::find()
+            .filter(cctx_status::Column::Status.is_not_in(vec![CctxStatusStatus::OutboundMined, CctxStatusStatus::Aborted, CctxStatusStatus::Reverted]))
+            .all(self.db.as_ref())
+            .await?;
+
+        Ok(SyncProgress {
+            historical_watermark_timestamp,
+            pending_status_updates_count: pending_cctxs_status_updates.len() as i64,
+            pending_cctxs_count: pending_cctxs.len() as i64,
+            realtime_gaps_count: realtime_gaps.len() as i64,
+        })
+        
     }
 
     pub async fn get_complete_cctx(&self, index: String) -> anyhow::Result<Option<CompleteCctx>> {

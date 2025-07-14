@@ -151,6 +151,14 @@ pub struct CompleteCctx {
 }
 
 #[derive(Debug)]
+pub struct SyncProgress {
+    pub historical_watermark_timestamp: NaiveDateTime,
+    pub pending_status_updates_count: i64,
+    pub pending_cctxs_count: i64,
+    pub realtime_gaps_count: i64,
+}
+
+#[derive(Debug)]
 pub struct CctxListItem {
     pub index: String,
     pub status: String,

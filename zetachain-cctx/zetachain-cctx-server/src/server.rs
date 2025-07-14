@@ -1,19 +1,21 @@
 use crate::{
     proto::{
         health_actix::route_health, health_server::HealthServer,
-        cctx_info_service_server::CctxInfoServiceServer,
+        {cctx_info_actix::route_cctx_info, cctx_info_server::CctxInfoServer},
+        stats_actix::route_stats, stats_server::StatsServer
     },
     services::{
-        cctx::CctxService, HealthService
+        cctx::CctxService, HealthService, stats::StatsService
     },
     settings::Settings,
 };
 use blockscout_service_launcher::{
     launcher::{self, GracefulShutdownHandler, LaunchSettings}, tracing};
 
+
 use sea_orm::DatabaseConnection;
 use zetachain_cctx_logic::{client::Client, database::ZetachainCctxDatabase, indexer::Indexer};
-use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::cctx_info_service_actix::route_cctx_info_service;
+
 
 use std::sync::Arc;
 
@@ -24,20 +26,22 @@ struct Router {
     // TODO: add services here
     health: Arc<HealthService>,
     cctx: Arc<CctxService>,
+    stats: Arc<StatsService>,
 }
 
 impl Router {
     pub fn grpc_router(&self) -> tonic::transport::server::Router {
         tonic::transport::Server::builder()
             .add_service(HealthServer::from_arc(self.health.clone()))
-            .add_service(CctxInfoServiceServer::from_arc(self.cctx.clone()))
+            .add_service(CctxInfoServer::from_arc(self.cctx.clone()))
     }
 }
 
 impl launcher::HttpRouter for Router {
     fn register_routes(&self, service_config: &mut actix_web::web::ServiceConfig) {
         service_config.configure(|config| route_health(config, self.health.clone()));
-        service_config.configure(|config| route_cctx_info_service(config, self.cctx.clone()));
+        service_config.configure(|config| route_cctx_info(config, self.cctx.clone()));
+        service_config.configure(|config| route_stats(config, self.stats.clone()));
     }
 }
 
@@ -47,7 +51,7 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
     let database = Arc::new(ZetachainCctxDatabase::new(db.clone()));
     let health = Arc::new(HealthService::default());
     let cctx = Arc::new(CctxService::new(database.clone()));
-    
+    let stats = Arc::new(StatsService::new(database.clone()));
     if settings.indexer.enabled {
         let indexer = Indexer::new(settings.indexer,  client, database);
         tokio::spawn(async move {
@@ -57,8 +61,9 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
     }
 
     let router = Router {
-        cctx,
+        cctx,   
         health,
+        stats,
     };
 
     let grpc_router = router.grpc_router();

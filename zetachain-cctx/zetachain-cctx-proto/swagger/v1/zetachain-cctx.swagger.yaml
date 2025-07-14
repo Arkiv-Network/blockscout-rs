@@ -3,16 +3,17 @@ info:
   title: v1/zetachain-cctx.proto
   version: version not set
 tags:
-  - name: CctxInfoService
+  - name: CctxInfo
   - name: Health
+  - name: Stats
 consumes:
   - application/json
 produces:
   - application/json
 paths:
-  /api/v1/CctxInfoService:get:
+  /api/v1/CctxInfo:get:
     get:
-      operationId: CctxInfoService_GetCctxInfo
+      operationId: CctxInfo_GetCctxInfo
       responses:
         "200":
           description: A successful response.
@@ -28,10 +29,10 @@ paths:
           required: false
           type: string
       tags:
-        - CctxInfoService
-  /api/v1/CctxInfoService:list:
+        - CctxInfo
+  /api/v1/CctxInfo:list:
     get:
-      operationId: CctxInfoService_ListCctxs
+      operationId: CctxInfo_ListCctxs
       responses:
         "200":
           description: A successful response.
@@ -57,7 +58,21 @@ paths:
           required: false
           type: string
       tags:
-        - CctxInfoService
+        - CctxInfo
+  /api/v1/Stats:getSyncProgress:
+    get:
+      operationId: Stats_GetSyncProgress
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1GetSyncProgressResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      tags:
+        - Stats
   /health:
     get:
       summary: |-
@@ -203,6 +218,21 @@ definitions:
         items:
           type: object
           $ref: '#/definitions/v1RelatedCctx'
+  v1GetSyncProgressResponse:
+    type: object
+    properties:
+      historic_watermark_timestamp:
+        type: string
+        format: int64
+      pending_status_updates_count:
+        type: string
+        format: int64
+      pending_cctxs_count:
+        type: string
+        format: int64
+      realtime_gaps_count:
+        type: string
+        format: int64
   v1HealthCheckResponse:
     type: object
     properties:
