@@ -10,6 +10,8 @@ services:
       - ZETACHAIN_CCTX__CONFIG=config/testnet.toml
     depends_on:
       - postgres
+    volumes:
+      - ./config:/app/config
 
   postgres:
     image: postgres:15
