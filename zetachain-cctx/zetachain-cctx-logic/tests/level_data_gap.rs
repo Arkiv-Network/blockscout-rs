@@ -32,7 +32,7 @@ async fn test_level_data_gap() {
     let insert_statement = format!(
         r#"
     INSERT INTO cross_chain_tx (creator, index, zeta_fees, processing_status, relayed_message, last_status_update_timestamp, protocol_contract_version,updated_by) 
-    VALUES ('zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm', '0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31', '0', 'unlocked'::processing_status, '', '2025-01-19 12:31:24', 'V2','test');
+    VALUES ('zeta18pksjzclks34qkqyaahf2rakss80mnusju77cm', '0x7f70bf83ed66c8029d8b2fce9ca95a81d053243537d0ea694de5a9c8e7d42f31', '0', 'Unlocked'::processing_status, '', '2025-01-19 12:31:24', 'V2','test');
     INSERT INTO cctx_status (cross_chain_tx_id, status, status_message, error_message, last_update_timestamp, is_abort_refunded, created_timestamp, error_message_revert, error_message_abort) 
     VALUES (1, 'OutboundMined', '', '', '2025-01-19 12:31:24', false, 1750344684, '', '');
     "#

@@ -55,21 +55,21 @@ pub enum InboundStatus {
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "kind")]
 pub enum Kind {
-    #[sea_orm(string_value = "realtime")]
+    #[sea_orm(string_value = "Realtime")]
     Realtime,
-    #[sea_orm(string_value = "historical")]
+    #[sea_orm(string_value = "Historical")]
     Historical,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "processing_status")]
 pub enum ProcessingStatus {
-    #[sea_orm(string_value = "locked")]
+    #[sea_orm(string_value = "Locked")]
     Locked,
-    #[sea_orm(string_value = "unlocked")]
+    #[sea_orm(string_value = "Unlocked")]
     Unlocked,
-    #[sea_orm(string_value = "failed")]
+    #[sea_orm(string_value = "Failed")]
     Failed,
-    #[sea_orm(string_value = "done")]
+    #[sea_orm(string_value = "Done")]
     Done,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]

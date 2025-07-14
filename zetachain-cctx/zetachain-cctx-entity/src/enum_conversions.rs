@@ -20,8 +20,8 @@ impl TryFrom<String> for Kind {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         match value.as_str() {
-            "realtime" => Ok(Kind::Realtime),
-            "historical" => Ok(Kind::Historical),
+            "Realtime" => Ok(Kind::Realtime),
+            "Historical" => Ok(Kind::Historical),
             _ => Err(format!("Invalid Kind: {}", value)),
         }
     }
@@ -199,10 +199,10 @@ impl TryFrom<String> for ProcessingStatus {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
         match value.as_str() {
-            "locked" => Ok(ProcessingStatus::Locked),
-            "unlocked" => Ok(ProcessingStatus::Unlocked),
-            "failed" => Ok(ProcessingStatus::Failed),
-            "done" => Ok(ProcessingStatus::Done),
+            "Locked" => Ok(ProcessingStatus::Locked),
+            "Unlocked" => Ok(ProcessingStatus::Unlocked),
+            "Failed" => Ok(ProcessingStatus::Failed),
+            "Done" => Ok(ProcessingStatus::Done),
             _ => Err(format!("Invalid ProcessingStatus: {}", value)),
         }
     }

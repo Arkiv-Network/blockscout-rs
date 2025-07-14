@@ -422,6 +422,7 @@ impl ZetachainCctxDatabase {
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     pub async fn update_watermark(
         &self,
         watermark_id: i32,
@@ -890,13 +891,13 @@ impl ZetachainCctxDatabase {
             SELECT cctx.id
             FROM cross_chain_tx cctx
             JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
-            WHERE cctx.processing_status = 'failed'::processing_status
+            WHERE cctx.processing_status = 'Failed'::processing_status
             AND cctx.last_status_update_timestamp + INTERVAL '1 hour' * POWER(2, cctx.retries_number) < NOW() 
             ORDER BY cctx.last_status_update_timestamp ASC,cs.created_timestamp DESC
             LIMIT 100
         )
         UPDATE cross_chain_tx cctx
-        SET processing_status = 'locked'::processing_status, last_status_update_timestamp = NOW(), retries_number = retries_number + 1
+        SET processing_status = 'Locked'::processing_status, last_status_update_timestamp = NOW(), retries_number = retries_number + 1
         WHERE id IN (SELECT id FROM cctxs)
         RETURNING id, index, root_id, depth, retries_number
         "#
@@ -928,18 +929,27 @@ impl ZetachainCctxDatabase {
     #[instrument(,level="debug",skip_all)]
     pub async fn get_unlocked_watermarks(&self, kind: Kind) -> anyhow::Result<Vec<(i32,String,i32)>> {
 
+        let debug_info = watermark::Entity::find()
+            .filter(watermark::Column::Kind.eq(kind.clone()))
+            .filter(watermark::Column::ProcessingStatus.eq(ProcessingStatus::Unlocked))
+            .all(self.db.as_ref())
+            .await?;
+        tracing::debug!("debug_info: {:?}", debug_info);
+
+        let kind_str = kind.to_string();
         let query_statement = format!(
             r#"
             WITH unlocked_watermarks AS (
-                SELECT * FROM watermark WHERE kind::text = '{kind}' AND processing_status = 'unlocked'
+                SELECT * FROM watermark WHERE kind::text = '{kind_str}' AND processing_status::text = 'Unlocked'
                 FOR UPDATE SKIP LOCKED
             )
             UPDATE watermark
-            SET processing_status = 'locked' ,updated_at = NOW()
+            SET processing_status = 'Locked' ,updated_at = NOW()
             WHERE id IN (SELECT id FROM unlocked_watermarks)
             RETURNING id, pointer, retries_number
             "#
         );
+        tracing::debug!("query_statement: {:?}", query_statement);
         let query_statement = Statement::from_sql_and_values(DbBackend::Postgres, query_statement, vec![]);
 
         let watermarks: Result<Vec<(i32,String,i32)>, sea_orm::DbErr> = self
@@ -966,14 +976,14 @@ impl ZetachainCctxDatabase {
             SELECT cctx.id
             FROM cross_chain_tx cctx
             JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
-            WHERE cctx.processing_status = 'unlocked'::processing_status
+            WHERE cctx.processing_status = 'Unlocked'::processing_status
             AND cctx.last_status_update_timestamp + INTERVAL '{polling_interval} milliseconds' * (POWER(2, cctx.retries_number) - 1) < NOW() 
             ORDER BY cctx.last_status_update_timestamp ASC,cs.created_timestamp DESC
             LIMIT {batch_size}
             FOR UPDATE SKIP LOCKED
         )
         UPDATE cross_chain_tx cctx
-        SET processing_status = 'locked'::processing_status, last_status_update_timestamp = NOW(), retries_number = retries_number + 1
+        SET processing_status = 'Locked'::processing_status, last_status_update_timestamp = NOW(), retries_number = retries_number + 1
         WHERE id IN (SELECT id FROM cctxs)
         RETURNING id, index, root_id, depth, retries_number
         "#
@@ -1805,7 +1815,7 @@ impl ZetachainCctxDatabase {
         }
 
         // Aggregate multiple outbound_params rows into a single row per CCTX
-        sql.push_str(" GROUP BY cctx.index, cs.status, ip.sender_chain_id, cs.last_update_timestamp ");
+        sql.push_str(" GROUP BY cctx.index, cs.status, ip.sender_chain_id, cs.last_update_timestamp,ip.amount ");
 
         // Add ordering and pagination
         param_count += 1;

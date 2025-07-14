@@ -14,7 +14,7 @@ impl MigrationTrait for Migration {
                     CREATE TYPE tx_finalization_status AS ENUM ('NotFinalized', 'Finalized', 'Executed');
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'kind') THEN
-                    CREATE TYPE kind AS ENUM ('realtime', 'historical');
+                    CREATE TYPE kind AS ENUM ('Realtime', 'Historical');
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'cctx_status_status') THEN
                     CREATE TYPE cctx_status_status AS ENUM ('PendingInbound', 'PendingOutbound', 'PendingRevert', 'Aborted', 'Reverted', 'OutboundMined');
@@ -32,7 +32,7 @@ impl MigrationTrait for Migration {
                     CREATE TYPE protocol_contract_version AS ENUM ('V1', 'V2');
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'processing_status') THEN
-                    CREATE TYPE processing_status AS ENUM ('locked', 'unlocked', 'failed', 'done');
+                    CREATE TYPE processing_status AS ENUM ('Locked', 'Unlocked', 'Failed', 'Done');
                 END IF;
             END $$;"#,
         )
@@ -52,15 +52,15 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(Watermark::Kind)
-                            .enumeration("kind", ["realtime", "historical"])
+                            .enumeration("kind", ["Realtime", "Historical"])
                             .not_null(),
                     )
                     .col(ColumnDef::new(Watermark::Pointer).string().not_null())
                     .col(
                         ColumnDef::new(Watermark::ProcessingStatus)
-                            .enumeration("processing_status", ["locked", "unlocked", "failed", "done"])
+                            .enumeration("processing_status", ["Locked", "Unlocked", "Failed", "Done"])
                             .not_null()
-                            .default("unlocked"),
+                            .default("Unlocked"),
                     )
                     .col(
                         ColumnDef::new(Watermark::CreatedAt)
@@ -107,9 +107,9 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(CrossChainTx::RetriesNumber).integer().not_null().default(0))
                     .col(
                         ColumnDef::new(CrossChainTx::ProcessingStatus)
-                            .enumeration("processing_status", ["locked", "unlocked", "failed", "done"])
+                            .enumeration("processing_status", ["Locked", "Unlocked", "Failed", "Done"])
                             .not_null()
-                            .default("unlocked"),
+                            .default("Unlocked"),
                     )
                     .col(ColumnDef::new(CrossChainTx::RelayedMessage).text().null())
                     .col(
