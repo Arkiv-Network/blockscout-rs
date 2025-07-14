@@ -9,7 +9,7 @@ services:
     environment:
       - ZETACHAIN_CCTX__CONFIG=config/testnet.toml
     depends_on:
-      - postgres
+      - database
     volumes:
       - ./config:/app/config
 
