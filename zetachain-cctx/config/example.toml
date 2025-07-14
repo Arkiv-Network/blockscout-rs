@@ -26,7 +26,7 @@ retry_threshold = 10
 failed_cctxs_polling_interval = 10000
 realtime_threshold = 10000
 [rpc]
-url = "https://zetachain-athens.g.allthatnode.com/archive/rest/a0edcf7bca3748b0a115df6163411457/zeta-chain/"
+url = "https://zetachain-athens.g.allthatnode.com/archive/rest/API_KEY/zeta-chain/"
 request_per_second = 10
 num_of_retries=30
 retry_delay_ms=500
