@@ -18,5 +18,10 @@ http:
     #################### Stats ####################
 
     - selector: blockscout.zetachainCctx.v1.Stats.GetSyncProgress
-      get: /api/v1/Stats:getSyncProgress
+      get: /api/v1/Stats:getSyncProgress  
+
+    #################### Token Info ####################
+
+    - selector: blockscout.zetachainCctx.v1.TokenInfo.GetTokenInfo
+      get: /api/v1/TokenInfo:get
 

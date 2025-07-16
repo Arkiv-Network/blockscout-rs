@@ -74,6 +74,25 @@ paths:
             $ref: '#/definitions/googlerpcStatus'
       tags:
         - Stats
+  /api/v1/TokenInfo:get:
+    get:
+      operationId: TokenInfo_GetTokenInfo
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1TokenInfoResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: asset
+          in: query
+          required: false
+          type: string
+      tags:
+        - TokenInfo
   /health:
     get:
       summary: |-

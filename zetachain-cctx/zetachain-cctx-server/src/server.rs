@@ -1,11 +1,9 @@
 use crate::{
     proto::{
-        health_actix::route_health, health_server::HealthServer,
-        {cctx_info_actix::route_cctx_info, cctx_info_server::CctxInfoServer},
-        stats_actix::route_stats
+        cctx_info_actix::route_cctx_info, cctx_info_server::CctxInfoServer, health_actix::route_health, health_server::HealthServer, stats_actix::route_stats, token_info_actix::route_token_info, token_info_server::{TokenInfo, TokenInfoServer}
     },
     services::{
-        cctx::CctxService, HealthService, stats::StatsService
+        cctx::CctxService, stats::StatsService, token::TokenInfoService, HealthService,
     },
     settings::Settings,
 };
@@ -28,6 +26,7 @@ struct Router {
     health: Arc<HealthService>,
     cctx: Arc<CctxService>,
     stats: Arc<StatsService>,
+    token_info: Arc<TokenInfoService>,
 }
 struct MyWebSocket;
 
@@ -84,6 +83,7 @@ impl Router {
             .add_service(HealthServer::from_arc(self.health.clone()))
             .add_service(CctxInfoServer::from_arc(self.cctx.clone()))
             .add_service(StatsServer::from_arc(self.stats.clone()))
+            .add_service(TokenInfoServer::from_arc(self.token_info.clone()))
     }
 }
 
@@ -93,6 +93,7 @@ impl launcher::HttpRouter for Router {
         service_config.configure(|config| route_cctx_info(config, self.cctx.clone()));
         service_config.configure(|config| route_stats(config, self.stats.clone()));
         service_config.configure(|config| route_ws(config, self.cctx.clone()));
+        service_config.configure(|config| route_token_info(config, self.token_info.clone()));
     }
 }
 
@@ -103,6 +104,7 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
     let health = Arc::new(HealthService::default());
     let cctx = Arc::new(CctxService::new(database.clone()));
     let stats = Arc::new(StatsService::new(database.clone()));
+    let token_info = Arc::new(TokenInfoService::new(database.clone()));
     if settings.indexer.enabled {
         let indexer = Indexer::new(settings.indexer,  client, database);
         tokio::spawn(async move {
@@ -115,6 +117,7 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
         cctx,   
         health,
         stats,
+        token_info,
     };
 
     let grpc_router = router.grpc_router();
