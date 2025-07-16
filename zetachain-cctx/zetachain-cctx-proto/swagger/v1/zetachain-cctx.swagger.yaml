@@ -4,6 +4,7 @@ info:
   version: version not set
 tags:
   - name: CctxInfo
+  - name: TokenInfo
   - name: Health
   - name: Stats
 consumes:
@@ -424,6 +425,18 @@ definitions:
       revert_gas_limit:
         type: string
     title: RevertOptions represents the options for reverting a cctx
+  v1TokenInfoResponse:
+    type: object
+    properties:
+      foreign_chain_id:
+        type: string
+      decimals:
+        type: integer
+        format: int32
+      name:
+        type: string
+      symbol:
+        type: string
   v1TxFinalizationStatus:
     type: string
     enum:

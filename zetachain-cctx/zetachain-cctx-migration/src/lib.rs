@@ -2,6 +2,7 @@ pub use sea_orm_migration::prelude::*;
 
 mod m20220101_000001_create_table;
 mod m20220101_000002_add_foreign_key_indexes;
+mod m20220101_000003_create_token_table;
 
 pub struct Migrator;
 
@@ -11,6 +12,7 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20220101_000001_create_table::Migration),
             Box::new(m20220101_000002_add_foreign_key_indexes::Migration),
+            Box::new(m20220101_000003_create_token_table::Migration),
         ]
     }
 }

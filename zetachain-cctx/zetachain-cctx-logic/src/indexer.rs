@@ -8,7 +8,7 @@ use futures::future::join;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 use crate::database::ZetachainCctxDatabase;
-use crate::models::{CctxShort, PagedCCTXResponse};
+use crate::models::{CctxShort, PagedCCTXResponse, PagedTokenResponse, Token};
 use zetachain_cctx_entity::sea_orm_active_enums::{Kind, ProcessingStatus};
 use std::result::Result::Ok as ResultOk;
 use std::result::Result::Err as ResultErr;
@@ -30,6 +30,7 @@ enum IndexerJob {
     StatusUpdate(CctxShort, Uuid),             //cctx index and id to be updated
     LevelDataGap(i32,String, i32, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
     HistoricalDataFetch(i32,String, Uuid), // Watermark (pointer) to the next page of cctxs to be fetched
+    TokenSync(Uuid), // Token synchronization job
 }
 
 #[instrument(,level="debug",skip_all)]
@@ -143,6 +144,38 @@ async fn update_cctx_relations(
     .await
     .map_err(|e| anyhow::format_err!("Failed to traverse and update cctx tree relationships: {}", e))?;
 
+    Ok(())
+}
+
+#[instrument(,level="info",skip_all, fields(job_id = %job_id))]
+async fn sync_tokens(
+    job_id: Uuid,
+    database: Arc<ZetachainCctxDatabase>,
+    client: &Client,
+    batch_size: u32,
+) -> anyhow::Result<()> {
+    let mut next_key: Option<String> = None;
+    
+    loop {
+        let response = client
+            .list_tokens(next_key.as_deref(), batch_size)
+            .await?;
+        
+        if response.foreign_coins.is_empty() {
+            tracing::debug!("No tokens found");
+            break;
+        }
+        
+        database.sync_tokens(job_id, response.foreign_coins).await?;
+        
+        if response.pagination.next_key.is_none() {
+            tracing::debug!("Reached end of tokens");
+            break;
+        }
+        
+        next_key = response.pagination.next_key;
+    }
+    
     Ok(())
 }
 
@@ -272,6 +305,14 @@ impl Indexer {
             }
         });
 
+        let token_stream = Box::pin(async_stream::stream! {
+            loop {
+                let job_id = Uuid::new_v4();
+                yield IndexerJob::TokenSync(job_id);
+                tokio::time::sleep(Duration::from_millis(self.settings.token_polling_interval)).await;
+            }
+        });
+
 
         //Most of the data is processed in streams, because we don't care about exact timings but rather the eventual consistency and processing order.
         // Priority strategy in descending order:
@@ -279,11 +320,13 @@ impl Indexer {
         // 2. Status updates and related cctxs search (medium priority) in LIFO order. If cctx update fails a lot, we mark it as failed and pass it to the failed cctxs stream.
         // 3. Historical sync. We can't skip the watermark, because it's sequential, and we can't fetch the next pointer without processing the current one, so we have to keep trying.
         // 4. Failed cctx updates (lowest priority)
+        // 5. Token synchronization (lowest priority)
         let combined_stream =
             select_with_strategy(historical_stream, failed_cctxs_stream, prio_left);
         let combined_stream =
             select_with_strategy(status_update_stream, combined_stream, prio_left);
         let combined_stream = select_with_strategy(level_data_gap_stream, combined_stream, prio_left);
+        let combined_stream = select_with_strategy(combined_stream, token_stream, prio_left);
         // Unlike everything else, realtime data fetch must run at configured frequency, so we run it in parallel as a dedicated thread 
         // We can't use streams because it would lead to accumulation of jobs
         let dedicated_real_time_fetcher = self.realtime_fetch_handler();
@@ -296,6 +339,7 @@ impl Indexer {
                 let level_data_gap_batch_size = self.settings.realtime_fetch_batch_size;
                 let retry_threshold = self.settings.retry_threshold;
                 let realtime_threshold = self.settings.realtime_threshold;
+                let token_batch_size = self.settings.token_batch_size;
                 tokio::spawn(async move {
                     match job {
                         IndexerJob::StatusUpdate(cctx, job_id) => {
@@ -329,6 +373,12 @@ impl Indexer {
                             if let Err(e) = historical_sync(database.clone(), &client, id, &pointer, job_id, historical_batch_size).await {
                                 tracing::warn!(error = %e, job_id = %job_id, watermark_id = %id, watermark_pointer = %pointer, "Failed to sync historical data");
                                 database.unlock_watermark(id,job_id).await.unwrap();
+                            }
+                        }
+                        
+                        IndexerJob::TokenSync(job_id) => {
+                            if let Err(e) = sync_tokens(job_id, database.clone(), &client, token_batch_size).await {
+                                tracing::warn!(error = %e, job_id = %job_id, "Failed to sync tokens");
                             }
                         }
                     }

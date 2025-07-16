@@ -52,34 +52,25 @@ pub struct CctxShort {
     pub retries_number: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CrossChainTx {
-    pub creator: String,
-    pub index: String,
-    pub zeta_fees: String,
-    pub relayed_message: String,
-    pub cctx_status: CctxStatus,
-    pub inbound_params: InboundParams,
-    pub outbound_params: Vec<OutboundParams>,
-    pub protocol_contract_version: String,
-    pub revert_options: RevertOptions,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Pagination {
+    pub next_key: Option<String>,
+    pub total: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CctxStatus {
     pub status: String,
     pub status_message: String,
     pub error_message: String,
-    #[serde(rename = "lastUpdate_timestamp")]
     pub last_update_timestamp: String,
-    #[serde(rename = "isAbortRefunded")]
     pub is_abort_refunded: bool,
     pub created_timestamp: String,
     pub error_message_revert: String,
     pub error_message_abort: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct InboundParams {
     pub sender: String,
     pub sender_chain_id: String,
@@ -97,10 +88,15 @@ pub struct InboundParams {
     pub confirmation_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CallOptions {
+    pub gas_limit: String,
+    pub is_arbitrary_call: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OutboundParams {
     pub receiver: String,
-    #[serde(rename = "receiver_chainId")]
     pub receiver_chain_id: String,
     pub coin_type: CoinType,
     pub amount: String,
@@ -120,13 +116,7 @@ pub struct OutboundParams {
     pub confirmation_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize,Clone)]
-pub struct CallOptions {
-    pub gas_limit: String,
-    pub is_arbitrary_call: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RevertOptions {
     pub revert_address: String,
     pub call_on_revert: bool,
@@ -135,11 +125,19 @@ pub struct RevertOptions {
     pub revert_gas_limit: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Pagination {
-    pub next_key: Option<String>,
-    pub total: String,
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CrossChainTx {
+    pub creator: String,
+    pub index: String,
+    pub zeta_fees: String,
+    pub relayed_message: String,
+    pub cctx_status: CctxStatus,
+    pub inbound_params: InboundParams,
+    pub outbound_params: Vec<OutboundParams>,
+    pub revert_options: RevertOptions,
+    pub protocol_contract_version: String,
 }
+
 #[derive(Debug)]
 pub struct CompleteCctx {
     pub cctx: cross_chain_tx::Model,
@@ -150,15 +148,19 @@ pub struct CompleteCctx {
     pub related: Vec<RelatedCctx>,
 }
 
-#[derive(Debug)]
-pub struct SyncProgress {
-    pub historical_watermark_timestamp: NaiveDateTime,
-    pub pending_status_updates_count: i64,
-    pub pending_cctxs_count: i64,
-    pub realtime_gaps_count: i64,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RelatedCctx {
+    pub index: String,
+    pub depth: i32,
+    pub source_chain_id: String,
+    pub status: String,
+    pub inbound_amount: String,
+    pub inbound_coin_type: String,
+    pub inbound_asset: Option<String>,
+    pub outbound_params: Vec<RelatedOutboundParams>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CctxListItem {
     pub index: String,
     pub status: String,
@@ -172,19 +174,15 @@ pub struct CctxListItem {
     pub coin_type: String,
 }
 
-#[derive(Debug)]
-pub struct RelatedCctx {
-    pub index: String,
-    pub depth: i32,
-    pub source_chain_id: String,
-    pub status: String,
-    pub inbound_amount: String,
-    pub inbound_coin_type: String,
-    pub inbound_asset: String,
-    pub outbound_params: Vec<RelatedOutboundParams>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncProgress {
+    pub historical_watermark_timestamp: NaiveDateTime,
+    pub pending_status_updates_count: i64,
+    pub pending_cctxs_count: i64,
+    pub realtime_gaps_count: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RelatedOutboundParams {
     pub amount: String,
     pub chain_id: String,
@@ -198,4 +196,68 @@ pub struct CctxWithStatus {
     pub root_id: Option<i32>,
     pub depth: i32,
     pub retries_number: i32,
+}
+
+// Token models for external service response
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Token {
+    pub zrc20_contract_address: String,
+    pub asset: String,
+    pub foreign_chain_id: String,
+    pub decimals: i32,
+    pub name: String,
+    pub symbol: String,
+    pub coin_type: String,
+    pub gas_limit: String,
+    pub paused: bool,
+    pub liquidity_cap: String,
+}
+
+impl TryFrom<Token> for zetachain_cctx_entity::token::ActiveModel {
+    type Error = anyhow::Error;
+    
+    fn try_from(token: Token) -> Result<Self, Self::Error> {
+        use zetachain_cctx_entity::token;
+        use sea_orm::ActiveValue;
+        
+        let coin_type = match token.coin_type.as_str() {
+            "Zeta" => DbCoinType::Zeta,
+            "Gas" => DbCoinType::Gas,
+            "ERC20" | "Erc20" => DbCoinType::Erc20,
+            "Cmd" => DbCoinType::Cmd,
+            "NoAssetCall" => DbCoinType::NoAssetCall,
+            _ => return Err(anyhow::anyhow!("Invalid coin type: {}", token.coin_type)),
+        };
+        
+        Ok(token::ActiveModel {
+            id: ActiveValue::NotSet,
+            zrc20_contract_address: ActiveValue::Set(token.zrc20_contract_address),
+            asset: ActiveValue::Set(token.asset),
+            foreign_chain_id: ActiveValue::Set(token.foreign_chain_id),
+            decimals: ActiveValue::Set(token.decimals),
+            name: ActiveValue::Set(token.name),
+            symbol: ActiveValue::Set(token.symbol),
+            coin_type: ActiveValue::Set(coin_type),
+            gas_limit: ActiveValue::Set(token.gas_limit),
+            paused: ActiveValue::Set(token.paused),
+            liquidity_cap: ActiveValue::Set(token.liquidity_cap),
+            created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+            updated_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PagedTokenResponse {
+    #[serde(rename = "foreignCoins")]
+    pub foreign_coins: Vec<Token>,
+    pub pagination: Pagination,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub foreign_chain_id: String,
+    pub decimals: i32,
+    pub name: String,
+    pub symbol: String,
 }

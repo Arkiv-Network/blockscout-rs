@@ -5,4 +5,5 @@ pub use super::cross_chain_tx::Entity as CrossChainTx;
 pub use super::inbound_params::Entity as InboundParams;
 pub use super::outbound_params::Entity as OutboundParams;
 pub use super::revert_options::Entity as RevertOptions;
+pub use super::token::Entity as Token;
 pub use super::watermark::Entity as Watermark;

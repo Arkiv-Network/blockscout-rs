@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::models::{
-    self, CctxListItem, CctxShort, CompleteCctx, CrossChainTx, RelatedCctx, RelatedOutboundParams, SyncProgress,
+    self, CctxListItem, CctxShort, CompleteCctx, CrossChainTx, RelatedCctx, RelatedOutboundParams, SyncProgress, Token, TokenInfo,
 };
 use anyhow::Ok;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -20,6 +20,7 @@ use zetachain_cctx_entity::{
         CctxStatusStatus, CoinType, ConfirmationMode, InboundStatus, Kind, ProtocolContractVersion,
         TxFinalizationStatus,
     },
+    token as TokenEntity,
     watermark,
 };
 
@@ -706,7 +707,7 @@ impl ZetachainCctxDatabase {
                     abort_address: ActiveValue::Set(Some(
                         cctx.revert_options.abort_address.clone(),
                     )),
-                    revert_message: ActiveValue::Set(cctx.revert_options.revert_message.clone()),
+                    revert_message: ActiveValue::Set(cctx.revert_options.revert_message.clone().map(|s| sanitize_string(s))),
                     revert_gas_limit: ActiveValue::Set(
                         cctx.revert_options.revert_gas_limit.clone(),
                     ),
@@ -1906,5 +1907,63 @@ impl ZetachainCctxDatabase {
         tracing::info!("items: {:?}", items);
 
         Ok(items)
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    pub async fn sync_tokens(
+        &self,
+        job_id: Uuid,
+        tokens: Vec<Token>,
+    ) -> anyhow::Result<()> {
+        if tokens.is_empty() {
+            return Ok(());
+        }
+
+        let mut token_models:Vec<TokenEntity::ActiveModel> = Vec::new();
+        for token in tokens {
+            let active_model = token.try_into()?;
+            token_models.push(active_model);
+        }
+
+        let insert_result = TokenEntity::Entity::insert_many(token_models)
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::column(TokenEntity::Column::Zrc20ContractAddress)
+                .update_columns([
+                    TokenEntity::Column::Asset,
+                    TokenEntity::Column::ForeignChainId,
+                    TokenEntity::Column::Decimals,
+                    TokenEntity::Column::Name,
+                    TokenEntity::Column::Symbol,
+                    TokenEntity::Column::CoinType,
+                    TokenEntity::Column::GasLimit,
+                    TokenEntity::Column::Paused,
+                    TokenEntity::Column::LiquidityCap,
+                    TokenEntity::Column::UpdatedAt,
+                ])
+                .to_owned(),
+        )
+            .exec_with_returning_many(self.db.as_ref())
+            .await?;
+
+
+        tracing::debug!("Synced {} tokens for job {}", insert_result.len(), job_id);
+        Ok(())
+    }
+
+    pub async fn get_token_by_asset(&self, asset: &str) -> anyhow::Result<Option<TokenInfo>> {
+        let token = TokenEntity::Entity::find()
+            .filter(TokenEntity::Column::Asset.eq(asset))
+            .one(self.db.as_ref())
+            .await?;
+
+        match token {
+            Some(token) => Ok(Some(TokenInfo {
+                foreign_chain_id: token.foreign_chain_id,
+                decimals: token.decimals,
+                name: token.name,
+                symbol: token.symbol,
+            })),
+            None => Ok(None),
+        }
     }
 }

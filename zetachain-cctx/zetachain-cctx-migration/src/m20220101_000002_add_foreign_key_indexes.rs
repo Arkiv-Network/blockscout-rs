@@ -100,6 +100,14 @@ impl MigrationTrait for Migration {
             .await?;
 
 
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_outbound_params_hash")
+                    .table(OutboundParams::Table)
+                    .to_owned(),
+            )
+            .await?;
         // Remove foreign key indexes
         manager
             .drop_index(

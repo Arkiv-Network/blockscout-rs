@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tracing::instrument;
 
-use crate::models::{CCTXResponse, CrossChainTx, InboundHashToCctxResponse, PagedCCTXResponse};
+use crate::models::{CCTXResponse, CrossChainTx, InboundHashToCctxResponse, PagedCCTXResponse, PagedTokenResponse};
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -147,6 +147,37 @@ impl Client {
 
         let text = response.text().await?;
         let body = serde_json::from_str::<InboundHashToCctxResponse>(&text)
+            .map_err(|e| anyhow::anyhow!("JSON parsing error: {}\n{}", e, text))?;    
+        Ok(body)
+    }
+
+    #[instrument(level="debug",skip_all)]
+    pub async fn list_tokens(
+        &self,
+        pagination_key: Option<&str>,
+        batch_size: u32
+    ) -> Result<PagedTokenResponse, Error> {
+        let mut url: Url = self.settings.url.parse().unwrap();
+        let path = url.path();
+        url.set_path(&format!("{}fungible/foreign_coins", path));
+        url.query_pairs_mut()
+            .append_pair("pagination.limit", &batch_size.to_string())
+            .finish();
+
+        if let Some(pagination_key) = pagination_key {
+            url.query_pairs_mut()
+                .append_pair("pagination.key", pagination_key);
+        }
+
+        let request = Request::new(Method::GET, url.clone());
+        let response = self
+            .make_request(request)
+            .await?
+            .error_for_status()
+            .map_err(|e| anyhow::anyhow!("HTTP request error: {}", e))?;
+
+        let text = response.text().await?;
+        let body = serde_json::from_str::<PagedTokenResponse>(&text)
             .map_err(|e| anyhow::anyhow!("JSON parsing error: {}\n{}", e, text))?;    
         Ok(body)
     }

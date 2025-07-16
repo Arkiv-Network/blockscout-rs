@@ -15,6 +15,8 @@ pub struct IndexerSettings {
    pub retry_threshold: u32,
    pub failed_cctxs_polling_interval: u64,
    pub realtime_threshold: i64,
+   pub token_polling_interval: u64,
+   pub token_batch_size: u32,
 }
 
 
@@ -38,6 +40,8 @@ impl Default for IndexerSettings {
             retry_threshold: 10,
             failed_cctxs_polling_interval: 1_000_000,
             realtime_threshold: 10000,
+            token_polling_interval: 300_000, // 5 minutes
+            token_batch_size: 100,
         }
     }
 }
