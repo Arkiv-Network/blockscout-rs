@@ -1828,16 +1828,23 @@ impl ZetachainCctxDatabase {
         cs.last_update_timestamp, --2
         ip.amount, --3
         ip.sender_chain_id, --4
-        string_agg(op.receiver_chain_id::text, ',') AS receiver_chain_id, --5
+        last_op.receiver_chain_id::text AS receiver_chain_id, --5
         cs.created_timestamp AS created_ts, --6
         ip.sender AS sender_address, --7
         ip.asset AS asset, --8
-        string_agg(op.receiver::text, ',') AS receiver_address, --9
+        last_op.receiver::text AS receiver_address, --9
         ip.coin_type::text AS coin_type --10
         FROM cross_chain_tx cctx
         INNER JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
         INNER JOIN inbound_params ip ON cctx.id = ip.cross_chain_tx_id
-        INNER JOIN outbound_params op ON cctx.id = op.cross_chain_tx_id
+        INNER JOIN (
+            SELECT 
+                op.cross_chain_tx_id,
+                op.receiver,
+                op.receiver_chain_id,
+                ROW_NUMBER() OVER (PARTITION BY op.cross_chain_tx_id ORDER BY op.id ASC) as rn
+            FROM outbound_params op
+        ) last_op ON cctx.id = last_op.cross_chain_tx_id AND last_op.rn = 1
         "#,
         );
 
@@ -1851,8 +1858,8 @@ impl ZetachainCctxDatabase {
             params.push(sea_orm::Value::String(Some(Box::new(status))));
         }
 
-        // Aggregate multiple outbound_params rows into a single row per CCTX
-        sql.push_str(" GROUP BY cctx.index, cs.status, ip.sender_chain_id, cs.last_update_timestamp,ip.amount,cs.created_timestamp,ip.sender,ip.asset,ip.coin_type ");
+        // No need to group since we're only getting the last outbound_params row per CCTX
+        sql.push_str(" ");
 
         // Add ordering and pagination
         param_count += 1;
