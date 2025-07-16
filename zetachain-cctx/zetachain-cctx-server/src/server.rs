@@ -9,14 +9,16 @@ use crate::{
     },
     settings::Settings,
 };
+use actix_web::{web, HttpRequest, Responder};
 use blockscout_service_launcher::{
     launcher::{self, GracefulShutdownHandler, LaunchSettings}, tracing};
 
-
+    use actix_web_actors::ws;
 use sea_orm::DatabaseConnection;
 use zetachain_cctx_logic::{client::Client, database::ZetachainCctxDatabase, indexer::Indexer};
+use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::{cctx_info_server::CctxInfo, stats_server::StatsServer};
 
-
+use actix::ActorContext;
 use std::sync::Arc;
 
 const SERVICE_NAME: &str = "zetachain_cctx";
@@ -27,12 +29,61 @@ struct Router {
     cctx: Arc<CctxService>,
     stats: Arc<StatsService>,
 }
+struct MyWebSocket;
+
+use actix::{Actor, StreamHandler, AsyncContext};
+
+
+impl Actor for MyWebSocket {
+    type Context = ws::WebsocketContext<Self>;
+
+    // Optional: heartbeat or setup logic
+    fn started(&mut self, ctx: &mut Self::Context) {
+        ctx.text("WebSocket connection established");
+    }
+}
+
+impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
+    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
+        match msg {
+            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
+            Ok(ws::Message::Text(text)) => {
+                // Echo or handle your own protocol
+                ctx.text(format!("Echo: {}", text));
+            },
+            Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
+            Ok(ws::Message::Close(reason)) => {
+                ctx.close(reason);
+                ctx.stop();
+            },
+            _ => (),
+        }
+    }
+}
+async fn ws_handler(
+    req: HttpRequest,
+    stream: web::Payload,
+) -> impl Responder {
+    ws::start(MyWebSocket {}, &req, stream)
+}
+
+
+
+
+pub fn route_ws(
+    config: &mut ::actix_web::web::ServiceConfig,
+    service: Arc<dyn CctxInfo + Send + Sync + 'static>,
+) {
+    config.app_data(::actix_web::web::Data::from(service));
+    config.route("/ws/", ::actix_web::web::get().to(ws_handler));
+}
 
 impl Router {
     pub fn grpc_router(&self) -> tonic::transport::server::Router {
         tonic::transport::Server::builder()
             .add_service(HealthServer::from_arc(self.health.clone()))
             .add_service(CctxInfoServer::from_arc(self.cctx.clone()))
+            .add_service(StatsServer::from_arc(self.stats.clone()))
     }
 }
 
@@ -41,6 +92,7 @@ impl launcher::HttpRouter for Router {
         service_config.configure(|config| route_health(config, self.health.clone()));
         service_config.configure(|config| route_cctx_info(config, self.cctx.clone()));
         service_config.configure(|config| route_stats(config, self.stats.clone()));
+        service_config.configure(|config| route_ws(config, self.cctx.clone()));
     }
 }
 
