@@ -23,7 +23,6 @@ use zetachain_cctx_entity::{
     watermark,
 };
 
-use sea_orm::{QueryOrder, QuerySelect, QueryTrait};
 
 
 pub struct ZetachainCctxDatabase {
@@ -1829,8 +1828,12 @@ impl ZetachainCctxDatabase {
         cs.last_update_timestamp, --2
         ip.amount, --3
         ip.sender_chain_id, --4
-        string_agg(op.receiver_chain_id::text, ',') AS receiver_chain_id,
-        MAX(cs.created_timestamp) AS created_ts
+        string_agg(op.receiver_chain_id::text, ',') AS receiver_chain_id, --5
+        cs.created_timestamp AS created_ts, --6
+        ip.sender AS sender_address, --7
+        ip.asset AS asset, --8
+        string_agg(op.receiver::text, ',') AS receiver_address, --9
+        ip.coin_type::text AS coin_type --10
         FROM cross_chain_tx cctx
         INNER JOIN cctx_status cs ON cctx.id = cs.cross_chain_tx_id
         INNER JOIN inbound_params ip ON cctx.id = ip.cross_chain_tx_id
@@ -1849,7 +1852,7 @@ impl ZetachainCctxDatabase {
         }
 
         // Aggregate multiple outbound_params rows into a single row per CCTX
-        sql.push_str(" GROUP BY cctx.index, cs.status, ip.sender_chain_id, cs.last_update_timestamp,ip.amount ");
+        sql.push_str(" GROUP BY cctx.index, cs.status, ip.sender_chain_id, cs.last_update_timestamp,ip.amount,cs.created_timestamp,ip.sender,ip.asset,ip.coin_type ");
 
         // Add ordering and pagination
         param_count += 1;
@@ -1874,6 +1877,10 @@ impl ZetachainCctxDatabase {
             let amount = row.try_get_by_index(3).map_err(|e| anyhow::anyhow!("amount: {}", e))?;
             let source_chain_id = row.try_get_by_index(4).map_err(|e| anyhow::anyhow!("source_chain_id: {}", e))?;
             let target_chain_id = row.try_get_by_index(5).map_err(|e| anyhow::anyhow!("target_chain_id: {}", e))?;
+            let sender_address = row.try_get_by_index(7).map_err(|e| anyhow::anyhow!("sender_address: {}", e))?;
+            let receiver_address = row.try_get_by_index(9).map_err(|e| anyhow::anyhow!("receiver_address: {}", e))?;
+            let asset = row.try_get_by_index(8).map_err(|e| anyhow::anyhow!("asset: {}", e))?;
+            let coin_type = row.try_get_by_index::<String>(10).map_err(|e| anyhow::anyhow!("coin_type: {}", e))?;
 
             items.push(CctxListItem {
                 index,
@@ -1882,6 +1889,10 @@ impl ZetachainCctxDatabase {
                 last_update_timestamp,
                 source_chain_id,
                 target_chain_id,
+                sender_address,
+                receiver_address,
+                asset,
+                coin_type,
             });
         }
 

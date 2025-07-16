@@ -42,7 +42,7 @@ async fn test_list_cctxs_endpoint() {
 
     // Test the ListCctxs endpoint
     let response: serde_json::Value =
-        test_server::send_get_request(&base, "/api/v1/CctxInfoService:list?limit=10&offset=0")
+        test_server::send_get_request(&base, "/api/v1/CctxInfo:list?limit=10&offset=0")
             .await;
 
     // The response should be a valid JSON object with a "cctxs" array
@@ -93,7 +93,7 @@ async fn test_list_cctxs_with_status_filter() {
     // Test the ListCctxs endpoint with status filter
     let response: serde_json::Value = test_server::send_get_request(
         &base,
-        "/api/v1/CctxInfoService:list?limit=10&offset=0&status=PendingInbound",
+        "/api/v1/CctxInfo:list?limit=10&offset=0&status=PendingInbound",
     )
     .await;
 
@@ -112,7 +112,7 @@ async fn test_list_cctxs_with_status_filter() {
 
     let response: serde_json::Value = test_server::send_get_request(
         &base,
-        "/api/v1/CctxInfoService:list?limit=10&offset=0&status=PendingOutbound",
+        "/api/v1/CctxInfo:list?limit=10&offset=0&status=PendingOutbound",
     )
     .await;
 
@@ -131,7 +131,7 @@ async fn test_list_cctxs_with_status_filter() {
 
     let response: serde_json::Value = test_server::send_get_request(
         &base,
-        "/api/v1/CctxInfoService:list?limit=2&offset=0&status=PendingOutbound",
+        "/api/v1/CctxInfo:list?limit=2&offset=0&status=PendingOutbound",
     )
     .await;
 

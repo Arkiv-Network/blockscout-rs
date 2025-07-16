@@ -5,7 +5,7 @@ use zetachain_cctx_logic::models::{
     CallOptions, CctxStatus, CrossChainTx, InboundParams, OutboundParams, RevertOptions,
 };
 use zetachain_cctx_logic::models::CoinType;
-use rand::{rng, Rng};
+use rand::Rng;
 
 #[allow(dead_code)]
 pub async fn init_db(db_prefix: &str, test_name: &str) -> TestDbGuard {

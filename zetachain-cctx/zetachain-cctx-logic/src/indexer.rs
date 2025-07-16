@@ -166,7 +166,7 @@ impl Indexer {
     #[instrument(,level="debug",skip(self))]
     fn realtime_fetch_handler(&self) -> JoinHandle<()> {
         
-        let polling_interval = self.settings.polling_interval;
+        let polling_interval = self.settings.realtime_polling_interval;
         let client = self.client.clone();
         let database = self.database.clone();
         let batch_size = self.settings.realtime_fetch_batch_size;

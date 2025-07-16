@@ -4,9 +4,8 @@ use tonic::{Request, Response, Status};
 
 use zetachain_cctx_logic::database::{ZetachainCctxDatabase};
 use zetachain_cctx_proto::blockscout::zetachain_cctx::v1::{
-    cctx_info_server::CctxInfo, CallOptions, CctxListItem, CctxStatus, CoinType, CrossChainTx, GetCctxInfoRequest, InboundParams, ListCctxsRequest, ListCctxsResponse, OutboundParams, RelatedCctx, RelatedOutboundParams, RevertOptions, Status as CCTXStatus
+    cctx_info_server::CctxInfo, CallOptions, CctxListItem, CctxStatus, CctxStatusReduced,CoinType, CrossChainTx, GetCctxInfoRequest, InboundParams, ListCctxsRequest, ListCctxsResponse, OutboundParams, RelatedCctx, RelatedOutboundParams, RevertOptions, Status as CCTXStatus
 };
-
 
 
 
@@ -17,6 +16,15 @@ pub struct CctxService {
 impl CctxService {
     pub fn new(database: Arc<ZetachainCctxDatabase>) -> Self {
         Self { database }
+    }
+}
+
+fn reduce_status(status: &str) -> &str {
+    match status {
+        "PendingOutbound" | "PendingInbound" | "PendingRevert" => "Pending",
+        "OutboundMined" => "Success",
+        "Aborted" | "Reverted" => "Failed",
+        _ => status,
     }
 }
 
@@ -35,8 +43,9 @@ impl CctxInfo for CctxService {
         .map_err(|e| Status::internal(e.to_string()))?;
 
         let cctxs:Result<Vec<CctxListItem>, Status> = cctx_items.into_iter().map(|cctx| { 
-            let status = CctxStatus::from_str_name(cctx.status.as_str())
-            .ok_or(Status::internal(format!("Index: {}, Invalid status: {}", cctx.index, cctx.status)))?;
+            let status = CctxStatus::from_str_name(cctx.status.as_str()).ok_or(Status::internal(format!("Index: {}, Invalid status: {}", cctx.index, cctx.status)))?;
+            let status_reduced = CctxStatusReduced::from_str_name(reduce_status(&cctx.status)).ok_or(Status::internal(format!("Index: {}, Invalid status: {}", cctx.index, cctx.status)))?;
+            let coin_type = CoinType::from_str_name(cctx.coin_type.as_str()).ok_or(Status::internal(format!("Index: {}, Invalid coin type: {}", cctx.index, cctx.coin_type)))?;
             Ok(CctxListItem {
                 index: cctx.index,
                 status: status.into(),
@@ -44,6 +53,11 @@ impl CctxInfo for CctxService {
                 source_chain_id: cctx.source_chain_id,
                 target_chain_id: cctx.target_chain_id,
                 last_update_timestamp: cctx.last_update_timestamp.and_utc().timestamp(),
+                sender_address: cctx.sender_address,
+                receiver_address: cctx.receiver_address,
+                asset: cctx.asset,
+                status_reduced: status_reduced.into(),
+                coin_type: coin_type.into(),
             })}).collect();
         Ok(Response::new(ListCctxsResponse { cctxs: cctxs? }))
     }

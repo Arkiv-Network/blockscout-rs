@@ -2,7 +2,7 @@ use crate::{
     proto::{
         health_actix::route_health, health_server::HealthServer,
         {cctx_info_actix::route_cctx_info, cctx_info_server::CctxInfoServer},
-        stats_actix::route_stats, stats_server::StatsServer
+        stats_actix::route_stats
     },
     services::{
         cctx::CctxService, HealthService, stats::StatsService
@@ -23,7 +23,6 @@ const SERVICE_NAME: &str = "zetachain_cctx";
 
 #[derive(Clone)]
 struct Router {
-    // TODO: add services here
     health: Arc<HealthService>,
     cctx: Arc<CctxService>,
     stats: Arc<StatsService>,

@@ -139,6 +139,8 @@ definitions:
         type: string
       status:
         $ref: '#/definitions/v1CctxStatus'
+      status_reduced:
+        $ref: '#/definitions/v1CctxStatusReduced'
       amount:
         type: string
       source_chain_id:
@@ -148,6 +150,14 @@ definitions:
       last_update_timestamp:
         type: string
         format: int64
+      sender_address:
+        type: string
+      receiver_address:
+        type: string
+      asset:
+        type: string
+      coin_type:
+        $ref: '#/definitions/v1CoinType'
   v1CctxStatus:
     type: string
     enum:
@@ -165,6 +175,13 @@ definitions:
        - PendingRevert: outbound cannot succeed; should revert inbound
        - Reverted: inbound reverted.
        - Aborted: inbound tx error or invalid paramters and cannot revert; just abort.
+  v1CctxStatusReduced:
+    type: string
+    enum:
+      - Pending
+      - Success
+      - Failed
+    default: Pending
   v1CoinType:
     type: string
     enum:
