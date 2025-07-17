@@ -14,6 +14,7 @@ use zetachain_cctx_entity::{cross_chain_tx, sea_orm_active_enums::Kind, watermar
 
 mod helpers;
 
+use zetachain_cctx_logic::events::NoOpBroadcaster;
 use zetachain_cctx_logic::{
     client::{Client, RpcSettings},
     database::ZetachainCctxDatabase,
@@ -150,6 +151,7 @@ async fn test_level_data_gap() {
         },
         Arc::new(rpc_client),
         Arc::new(ZetachainCctxDatabase::new(db.client().clone())),
+        Arc::new(NoOpBroadcaster{}),
     );
 
     // Run indexer for a short time to process realtime data

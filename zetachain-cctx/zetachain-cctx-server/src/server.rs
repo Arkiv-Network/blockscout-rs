@@ -6,6 +6,7 @@ use crate::{
         cctx::CctxService, stats::StatsService, token::TokenInfoService, HealthService,
     },
     settings::Settings,
+    websocket::{WebSocketClient, WebSocketManager, WebSocketEventBroadcaster, SubscriptionType},
 };
 use actix_web::{web, HttpRequest, Responder};
 use blockscout_service_launcher::{
@@ -27,54 +28,52 @@ struct Router {
     cctx: Arc<CctxService>,
     stats: Arc<StatsService>,
     token_info: Arc<TokenInfoService>,
+    websocket_manager: actix::Addr<WebSocketManager>,
 }
-struct MyWebSocket;
 
 use actix::{Actor, StreamHandler, AsyncContext};
-
-
-impl Actor for MyWebSocket {
-    type Context = ws::WebsocketContext<Self>;
-
-    // Optional: heartbeat or setup logic
-    fn started(&mut self, ctx: &mut Self::Context) {
-        ctx.text("WebSocket connection established");
-    }
-}
-
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
-    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
-        match msg {
-            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
-            Ok(ws::Message::Text(text)) => {
-                // Echo or handle your own protocol
-                ctx.text(format!("Echo: {}", text));
-            },
-            Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
-            Ok(ws::Message::Close(reason)) => {
-                ctx.close(reason);
-                ctx.stop();
-            },
-            _ => (),
-        }
-    }
-}
-async fn ws_handler(
+use uuid::Uuid;
+async fn ws_cctx_handler(
     req: HttpRequest,
     stream: web::Payload,
+    path: web::Path<String>,
+    manager: web::Data<actix::Addr<WebSocketManager>>,
 ) -> impl Responder {
-    ws::start(MyWebSocket {}, &req, stream)
+    let cctx_index = path.into_inner();
+    let client_id = Uuid::new_v4();
+    
+    let websocket_client = WebSocketClient {
+        client_id,
+        manager: manager.get_ref().clone(),
+        subscription_type: Some(SubscriptionType::CctxUpdates(cctx_index)),
+    };
+    
+    ws::start(websocket_client, &req, stream)
 }
 
-
-
+async fn ws_cctxs_handler(
+    req: HttpRequest,
+    stream: web::Payload,
+    manager: web::Data<actix::Addr<WebSocketManager>>,
+) -> impl Responder {
+    let client_id = Uuid::new_v4();
+    
+    let websocket_client = WebSocketClient {
+        client_id,
+        manager: manager.get_ref().clone(),
+        subscription_type: Some(SubscriptionType::NewCctxs),
+    };
+    
+    ws::start(websocket_client, &req, stream)
+}
 
 pub fn route_ws(
     config: &mut ::actix_web::web::ServiceConfig,
-    service: Arc<dyn CctxInfo + Send + Sync + 'static>,
+    websocket_manager: actix::Addr<WebSocketManager>,
 ) {
-    config.app_data(::actix_web::web::Data::from(service));
-    config.route("/ws/", ::actix_web::web::get().to(ws_handler));
+    config.app_data(web::Data::new(websocket_manager));
+    config.route("/ws/{cctx_index}", web::get().to(ws_cctx_handler));
+    config.route("/ws/cctxs", web::get().to(ws_cctxs_handler));
 }
 
 impl Router {
@@ -92,7 +91,7 @@ impl launcher::HttpRouter for Router {
         service_config.configure(|config| route_health(config, self.health.clone()));
         service_config.configure(|config| route_cctx_info(config, self.cctx.clone()));
         service_config.configure(|config| route_stats(config, self.stats.clone()));
-        service_config.configure(|config| route_ws(config, self.cctx.clone()));
+        service_config.configure(|config| route_ws(config, self.websocket_manager.clone()));
         service_config.configure(|config| route_token_info(config, self.token_info.clone()));
     }
 }
@@ -105,8 +104,13 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
     let cctx = Arc::new(CctxService::new(database.clone()));
     let stats = Arc::new(StatsService::new(database.clone()));
     let token_info = Arc::new(TokenInfoService::new(database.clone()));
+    
+    // Create WebSocket manager
+    let websocket_manager = WebSocketManager::default().start();
+    let websocket_broadcaster = WebSocketEventBroadcaster::new(websocket_manager.clone());
+    
     if settings.indexer.enabled {
-        let indexer = Indexer::new(settings.indexer,  client, database);
+        let indexer = Indexer::new(settings.indexer, client, database, Arc::new(WebSocketEventBroadcaster::new(websocket_manager.clone())));
         tokio::spawn(async move {
             //TODO: handle error, log it and restart the indexer
             let _ = indexer.run().await;
@@ -118,6 +122,7 @@ pub async fn run(settings: Settings, db: Arc<DatabaseConnection>, client: Arc<Cl
         health,
         stats,
         token_info,
+        websocket_manager,
     };
 
     let grpc_router = router.grpc_router();

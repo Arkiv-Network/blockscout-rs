@@ -9,6 +9,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 use crate::database::ZetachainCctxDatabase;
 use crate::models::{CctxShort, PagedCCTXResponse, PagedTokenResponse, Token};
+use crate::events::{EventBroadcaster, NoOpBroadcaster};
 use zetachain_cctx_entity::sea_orm_active_enums::{Kind, ProcessingStatus};
 use std::result::Result::Ok as ResultOk;
 use std::result::Result::Err as ResultErr;
@@ -24,6 +25,7 @@ pub struct Indexer {
     pub settings: IndexerSettings,
     pub client: Arc<Client>,
     pub database: Arc<ZetachainCctxDatabase>,
+    pub broadcaster: Arc<dyn EventBroadcaster>,
 }
 
 enum IndexerJob {
@@ -188,11 +190,13 @@ impl Indexer {
         settings: IndexerSettings,
         client: Arc<Client>,
         database: Arc<ZetachainCctxDatabase>,
+        broadcaster: Arc<dyn EventBroadcaster>,
     ) -> Self {
         Self {
             settings,
             client,
             database,
+            broadcaster,
         }
     }
 

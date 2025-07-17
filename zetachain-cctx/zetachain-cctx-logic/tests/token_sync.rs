@@ -16,6 +16,7 @@ use zetachain_cctx_entity::sea_orm_active_enums::ProcessingStatus;
 use zetachain_cctx_entity::{sea_orm_active_enums::Kind, watermark, token};
 use zetachain_cctx_logic::client::{Client, RpcSettings};
 use zetachain_cctx_logic::database::ZetachainCctxDatabase;
+use zetachain_cctx_logic::events::NoOpBroadcaster;
 use zetachain_cctx_logic::indexer::Indexer;
 use zetachain_cctx_logic::settings::IndexerSettings;
 
@@ -172,6 +173,7 @@ async fn test_token_sync_stream_works() {
         },
         Arc::new(client),
         Arc::new(ZetachainCctxDatabase::new(db_conn.clone())),
+        Arc::new(NoOpBroadcaster{}),
     );
 
     // Run indexer for a short time to process token data
@@ -390,6 +392,7 @@ async fn test_token_sync_pagination() {
         },
         Arc::new(client),
         Arc::new(ZetachainCctxDatabase::new(db_conn.clone())),
+        Arc::new(NoOpBroadcaster{}),
     );
 
     // Run indexer for a short time to process token data

@@ -20,6 +20,7 @@ use zetachain_cctx_entity::sea_orm_active_enums::ProcessingStatus;
 use zetachain_cctx_entity::{cross_chain_tx, sea_orm_active_enums::Kind, watermark};
 use zetachain_cctx_logic::client::{Client, RpcSettings};
 use zetachain_cctx_logic::database::ZetachainCctxDatabase;
+use zetachain_cctx_logic::events::NoOpBroadcaster;
 use zetachain_cctx_logic::indexer::Indexer;
 use zetachain_cctx_logic::settings::IndexerSettings;
 use zetachain_cctx_entity::cctx_status;
@@ -135,6 +136,7 @@ async fn test_historical_sync_updates_pointer() {
         .await
         .unwrap();
 
+    let broadcaster = Arc::new(NoOpBroadcaster{});
     // Create indexer
     let indexer = Indexer::new(
         IndexerSettings {
@@ -145,6 +147,7 @@ async fn test_historical_sync_updates_pointer() {
         },
         Arc::new(client),
         Arc::new(ZetachainCctxDatabase::new(db_conn.clone())),
+        broadcaster,
     );
 
     // Run indexer for a short time to process historical data

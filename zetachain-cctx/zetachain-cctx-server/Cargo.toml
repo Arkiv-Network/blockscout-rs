@@ -31,6 +31,7 @@ tonic = { workspace = true }
 tracing = "0.1"
 actix-web-actors = "4.0"
 actix = "0.13"
+uuid = { version = "1.13", features = ["v4"] }
 
 # # Uncomment if needed
 # ethers = "2.0.0"

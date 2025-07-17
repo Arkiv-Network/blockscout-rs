@@ -7,6 +7,7 @@ edition = "2021"
 [dependencies]
 zetachain-cctx-entity = { path = "../zetachain-cctx-entity" }
 anyhow = "1.0"
+async-trait = "0.1"
 blockscout-display-bytes = "1.0"
 tracing = "0.1"
 uuid = { version = "1.13", features = ["v4"] }
